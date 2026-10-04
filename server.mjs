@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, 'public');
-const storageDir = path.join(root, 'storage');
+const storageDir = process.env.VERCEL ? path.join('/tmp', 'storage') : path.join(root, 'storage');
 const uploadDir = path.join(storageDir, 'uploads');
 const dbPath = path.join(storageDir, 'birthdays.json');
 const port = Number(process.env.PORT || 4173);
@@ -328,4 +328,8 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(port, '0.0.0.0', () => console.log(`Birthday Spark is ready at http://localhost:${port}`));
+if (!process.env.VERCEL) {
+  server.listen(port, '0.0.0.0', () => console.log(`Birthday Spark is ready at http://localhost:${port}`));
+}
+
+export default server;
