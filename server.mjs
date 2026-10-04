@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, 'public');
-const storageDir = process.env.VERCEL ? path.join('/tmp', 'storage') : path.join(root, 'storage');
+const storageDir = process.env.STORAGE_DIR
+  ? path.resolve(process.env.STORAGE_DIR)
+  : (process.env.VERCEL ? path.join('/tmp', 'storage') : path.join(root, 'storage'));
 const uploadDir = path.join(storageDir, 'uploads');
 const dbPath = path.join(storageDir, 'birthdays.json');
 const port = Number(process.env.PORT || 4173);
