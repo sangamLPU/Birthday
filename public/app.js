@@ -43,6 +43,50 @@ const publicPath = slug => `/birthday/${encodeURIComponent(slug)}`;
 const tokenKey = slug => `birthday-spark-edit-${slug}`;
 const saveDraft = () => { try { localStorage.setItem('birthday-spark-draft', JSON.stringify(form)); } catch { /* private browsing can disable storage */ } };
 
+function encodeCardData(card) {
+  try {
+    const compact = {
+      r: card.recipient,
+      s: card.story,
+      t: card.themeId,
+      m: card.music,
+      c: card.customization,
+      p: (card.photos || []).map(p => ({ u: p.url, c: p.caption, y: p.year, m: p.memory }))
+    };
+    const jsonStr = JSON.stringify(compact);
+    const bytes = new TextEncoder().encode(jsonStr);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function decodeCardData(str) {
+  try {
+    let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) base64 += '=';
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const jsonStr = new TextDecoder().decode(bytes);
+    const data = JSON.parse(jsonStr);
+    return {
+      recipient: data.r || {},
+      story: data.s || {},
+      themeId: data.t || 'strawberry',
+      music: data.m || { enabled: false },
+      customization: data.c || {},
+      photos: (data.p || []).map(p => ({ url: p.u, caption: p.c || '', year: p.y || '', memory: p.m || '', alt: `${data.r?.name || 'Birthday'} memory` })),
+      message: { text: data.s?.letter || '', type: 'custom' },
+      slug: 'surprise'
+    };
+  } catch {
+    return null;
+  }
+}
+
 function setMeta(attribute, key, value) {
   let meta = document.querySelector(`meta[${attribute}="${key}"]`);
   if (!meta) { meta = document.createElement('meta'); meta.setAttribute(attribute, key); document.head.appendChild(meta); }
@@ -275,8 +319,9 @@ function wizardPage() {
 function successPage(slug) {
   const birthday = currentPage?.slug === slug ? currentPage : null;
   if (!birthday) return `${header()}<main class="error-state"><div><div class="success-icon">🎁</div><h1>Your little link isn’t here yet</h1><p>Build their birthday story first, then we’ll bring you back to its share card.</p><a class="btn btn-primary" href="/create" data-navigate>Make a birthday page</a></div></main>${footer()}`;
-  const link = `${location.origin}${publicPath(slug)}`;
-  return `${header()}<main class="success-wrap"><section class="success-card"><div class="success-icon" aria-hidden="true">🎉</div><span class="eyebrow">All wrapped up</span><h1>Your birthday surprise is ready!</h1><p>One lovely little page for ${esc(birthday.recipient.name)}. Send this link wherever they are, and let them open their surprise.</p><div class="share-url"><input id="share-link" aria-label="Birthday page link" readonly value="${esc(link)}"><button class="btn btn-primary btn-small" type="button" data-action="copy-link">Copy link</button></div><div class="share-actions"><button class="btn btn-secondary btn-small" type="button" data-action="share-native">Share…</button><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://wa.me/?text=${encodeURIComponent(`A little birthday surprise for ${birthday.recipient.name}: ${link}`)}">WhatsApp ↗</a><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`A birthday surprise for ${birthday.recipient.name}`)}">Telegram ↗</a><a class="btn btn-secondary btn-small" href="mailto:?subject=${encodeURIComponent(`A birthday surprise for ${birthday.recipient.name}`)}&body=${encodeURIComponent(`A little birthday surprise for you: ${link}`)}">Email ↗</a><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(link)}">Facebook ↗</a></div><div class="success-preview">${birthdayMarkup(birthday, { preview: true })}</div><div class="success-bottom"><a class="text-link" href="${publicPath(slug)}" data-navigate>Open their birthday page →</a><a class="text-link" href="/edit/${encodeURIComponent(slug)}" data-navigate>Edit this page</a><button class="text-link new-page-link" type="button" data-action="new-page">Make another page</button></div></section></main>${footer()}`;
+  const cardPayload = encodeCardData(birthday);
+  const link = `${location.origin}${publicPath(slug)}${cardPayload ? `#card=${cardPayload}` : ''}`;
+  return `${header()}<main class="success-wrap"><section class="success-card"><div class="success-icon" aria-hidden="true">🎉</div><span class="eyebrow">All wrapped up</span><h1>Your birthday surprise is ready!</h1><p>One lovely little page for ${esc(birthday.recipient.name)}. Send this link wherever they are, and let them open their surprise.</p><div class="share-url"><input id="share-link" aria-label="Birthday page link" readonly value="${esc(link)}"><button class="btn btn-primary btn-small" type="button" data-action="copy-link">Copy link</button></div><div class="share-actions"><button class="btn btn-secondary btn-small" type="button" data-action="share-native">Share…</button><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://wa.me/?text=${encodeURIComponent(`A little birthday surprise for ${birthday.recipient.name}: ${link}`)}">WhatsApp ↗</a><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`A birthday surprise for ${birthday.recipient.name}`)}">Telegram ↗</a><a class="btn btn-secondary btn-small" href="mailto:?subject=${encodeURIComponent(`A birthday surprise for ${birthday.recipient.name}`)}&body=${encodeURIComponent(`A little birthday surprise for you: ${link}`)}">Email ↗</a><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(link)}">Facebook ↗</a></div><div class="success-preview">${birthdayMarkup(birthday, { preview: true })}</div><div class="success-bottom"><a class="text-link" href="${publicPath(slug)}${cardPayload ? `#card=${cardPayload}` : ''}" data-navigate>Open their birthday page →</a><a class="text-link" href="/edit/${encodeURIComponent(slug)}" data-navigate>Edit this page</a><button class="text-link new-page-link" type="button" data-action="new-page">Make another page</button></div></section></main>${footer()}`;
 }
 
 function errorPage(title = 'This birthday surprise couldn’t be found 🎈', description = 'That little link may be old or mistyped. Ask the person who made it for a fresh one.') {
@@ -311,18 +356,46 @@ async function render() {
   if (path === '/themes') { updatePageMetadata('Birthday themes — Birthday Spark', 'Find a sweet birthday theme for every kind of lovely.'); root.innerHTML = themeGalleryPage(); return; }
   if (path.startsWith('/birthday/')) {
     const slug = path.slice('/birthday/'.length);
-    root.innerHTML = `<main class="error-state"><div><div class="success-icon">✦</div><h1>Opening your birthday surprise…</h1><p>A little love note is on its way.</p></div></main>`;
+    let cardFromHash = null;
+    try {
+      const hashMatch = location.hash.match(/[#&]card=([A-Za-z0-9_-]+)/);
+      if (hashMatch) cardFromHash = decodeCardData(hashMatch[1]);
+      if (!cardFromHash) {
+        const stored = localStorage.getItem(`birthday-spark-card-${slug}`);
+        if (stored) cardFromHash = JSON.parse(stored);
+      }
+    } catch { /* proceed */ }
+
+    if (cardFromHash) {
+      currentPage = cardFromHash;
+      const title = `Happy Birthday ${currentPage.recipient?.name || 'Friend'} 🎂`;
+      const description = `Someone made ${currentPage.recipient?.name || 'someone'} a special birthday surprise.`;
+      updatePageMetadata(title, description);
+      root.innerHTML = birthdayMarkup(currentPage);
+      updateMusicControls({ detail: { trackId: getActiveTrack(), volume: getMusicVolume() } });
+      observeBirthdayReveals();
+    } else {
+      root.innerHTML = `<main class="error-state"><div><div class="success-icon">✦</div><h1>Opening your birthday surprise…</h1><p>A little love note is on its way.</p></div></main>`;
+    }
+
     try {
       const response = await api(`/api/birthdays/${encodeURIComponent(slug)}`);
       if (sequence !== renderSequence) return;
       currentPage = response.birthday;
+      try { localStorage.setItem(`birthday-spark-card-${slug}`, JSON.stringify(currentPage)); } catch {}
       const title = `Happy Birthday ${currentPage.recipient.name} 🎂`;
       const description = `Someone made ${currentPage.recipient.name} a special birthday surprise.`;
       updatePageMetadata(title, description);
       root.innerHTML = birthdayMarkup(currentPage);
       updateMusicControls({ detail: { trackId: getActiveTrack(), volume: getMusicVolume() } });
       observeBirthdayReveals();
-    } catch (error) { if (sequence === renderSequence) { updatePageMetadata('Birthday surprise not found — Birthday Spark', 'This birthday surprise could not be found.'); root.innerHTML = errorPage('This birthday surprise couldn’t be found 🎈', error.message); } }
+    } catch (error) {
+      if (sequence === renderSequence) {
+        if (cardFromHash) return;
+        updatePageMetadata('Birthday surprise not found — Birthday Spark', 'This birthday surprise could not be found.');
+        root.innerHTML = errorPage('This birthday surprise couldn’t be found 🎈', error.message);
+      }
+    }
     return;
   }
   if (path.startsWith('/ready/')) { updatePageMetadata('Your birthday surprise is ready — Birthday Spark', 'Your special birthday page is ready to share.'); root.innerHTML = successPage(path.slice('/ready/'.length)); return; }
@@ -423,12 +496,12 @@ async function compressImage(file) {
   if (!file.type.startsWith('image/')) throw new Error('That file doesn’t look like a photo. Choose a JPG, PNG or WebP image.');
   if (file.size > 15 * 1024 * 1024) throw new Error('That photo is a little too large. Choose one under 15 MB.');
   const source = await createImageBitmap(file);
-  const scale = Math.min(1, 1500 / Math.max(source.width, source.height));
+  const scale = Math.min(1, 960 / Math.max(source.width, source.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(source.width * scale)); canvas.height = Math.max(1, Math.round(source.height * scale));
   const context = canvas.getContext('2d', { alpha: false });
   context.drawImage(source, 0, 0, canvas.width, canvas.height); source.close();
-  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .8));
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .75));
   if (!blob) throw new Error('This photo couldn’t be prepared. Please try another.');
   return await new Promise((resolve, reject) => {
     const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('This photo couldn’t be read.'));
@@ -474,7 +547,10 @@ async function generatePage(button) {
       localStorage.setItem(tokenKey(birthday.slug), response.editToken);
     }
     currentPage = birthday;
-    try { localStorage.setItem('birthday-spark-last-created', birthday.slug); } catch { /* optional convenience only */ }
+    try {
+      localStorage.setItem('birthday-spark-last-created', birthday.slug);
+      localStorage.setItem(`birthday-spark-card-${birthday.slug}`, JSON.stringify(birthday));
+    } catch { /* optional convenience only */ }
     saveDraft();
     go(`/ready/${encodeURIComponent(birthday.slug)}`);
   } catch (error) {

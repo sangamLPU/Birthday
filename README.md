@@ -12,6 +12,16 @@ npm start
 
 Open [http://localhost:4173](http://localhost:4173). Set `PORT` to use another port.
 
+## Deploying to Vercel (Free & Instant)
+
+1. Push your repository to GitHub.
+2. Go to [vercel.com/new](https://vercel.com/new).
+3. Import your **Birthday** repository.
+4. Keep all default build settings (Framework Preset: **Other**, Root Directory: `./`).
+5. Click **Deploy**!
+
+Your birthday website will be live with full SSL, global CDN edge caching, and indestructible share links with zero configuration or environment variables needed.
+
 ## How it is organized
 
 - `server.mjs` serves the app and implements validation, image storage, page persistence, public lookup, and token-protected edits/deletion.

@@ -28,9 +28,29 @@ const mimeTypes = {
   '.ico': 'image/x-icon', '.json': 'application/json; charset=utf-8'
 };
 
-await mkdir(uploadDir, { recursive: true });
+const kvUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+const kvToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+
+async function ensureStorage() {
+  try { await mkdir(uploadDir, { recursive: true }); }
+  catch { /* storage folder already created or running in read-only environment */ }
+}
 
 async function readDatabase() {
+  if (kvUrl && kvToken) {
+    try {
+      const res = await fetch(`${kvUrl}/get/birthdays`, {
+        headers: { Authorization: `Bearer ${kvToken}` }
+      });
+      const data = await res.json();
+      if (data && data.result) {
+        const parsed = JSON.parse(data.result);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (err) {
+      console.error('KV read error:', err.message);
+    }
+  }
   try {
     const rows = JSON.parse(await readFile(dbPath, 'utf8'));
     return Array.isArray(rows) ? rows : [];
@@ -41,9 +61,25 @@ async function readDatabase() {
 }
 
 async function writeDatabase(rows) {
-  const tempPath = `${dbPath}.${randomBytes(5).toString('hex')}.tmp`;
-  await writeFile(tempPath, JSON.stringify(rows, null, 2), { encoding: 'utf8', flag: 'wx' });
-  await rename(tempPath, dbPath);
+  if (kvUrl && kvToken) {
+    try {
+      await fetch(`${kvUrl}/set/birthdays`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${kvToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(JSON.stringify(rows))
+      });
+    } catch (err) {
+      console.error('KV write error:', err.message);
+    }
+  }
+  await ensureStorage();
+  try {
+    const tempPath = `${dbPath}.${randomBytes(5).toString('hex')}.tmp`;
+    await writeFile(tempPath, JSON.stringify(rows, null, 2), { encoding: 'utf8', flag: 'wx' });
+    await rename(tempPath, dbPath);
+  } catch (err) {
+    if (!kvUrl) console.error('Disk write error:', err.message);
+  }
 }
 
 function json(res, status, body) {
@@ -205,6 +241,10 @@ async function handleApi(req, res, url) {
     const bytes = Buffer.from(match[2], 'base64');
     if (bytes.length > 8 * 1024 * 1024) return json(res, 413, { error: 'That photo is too large. Try a smaller image.' });
     if (!validImage(bytes, type)) return json(res, 400, { error: 'That image could not be read. Please choose another.' });
+    if (process.env.VERCEL) {
+      return json(res, 201, { photo: { url: input.dataUrl, alt: 'Birthday memory' } });
+    }
+    await ensureStorage();
     const extension = type === 'image/jpeg' ? 'jpg' : type.slice(6);
     const fileName = `${randomUUID()}.${extension}`;
     await writeFile(path.join(uploadDir, fileName), bytes, { flag: 'wx' });
@@ -316,9 +356,10 @@ async function serveStatic(req, res, url) {
   }
 }
 
-const server = createServer(async (req, res) => {
+export async function requestListener(req, res) {
   try {
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const rawPath = req.headers['x-matched-path'] || req.url;
+    const url = new URL(rawPath, `http://${req.headers.host || 'localhost'}`);
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST' && req.method !== 'PATCH' && req.method !== 'DELETE') {
       res.writeHead(405, { allow: 'GET, HEAD, POST, PATCH, DELETE' }); return res.end();
     }
@@ -328,10 +369,13 @@ const server = createServer(async (req, res) => {
     if (!res.headersSent) json(res, 500, { error: 'The birthday magic hit a little bump. Please try again.' });
     else res.end();
   }
-});
+}
+
+const server = createServer(requestListener);
 
 if (!process.env.VERCEL) {
   server.listen(port, '0.0.0.0', () => console.log(`Birthday Spark is ready at http://localhost:${port}`));
 }
 
-export default server;
+export { server };
+export default requestListener;
