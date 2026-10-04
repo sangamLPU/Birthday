@@ -111,7 +111,12 @@ function cleanText(value, maxLength, field) {
 }
 
 function safePhoto(photo) {
-  if (!photo || typeof photo !== 'object' || typeof photo.url !== 'string' || !/^\/uploads\/[a-f0-9-]+\.(?:webp|png|jpe?g)$/.test(photo.url)) {
+  if (!photo || typeof photo !== 'object' || typeof photo.url !== 'string') {
+    throw new Error('One of the photos is not valid. Please upload it again.');
+  }
+  const isUploadPath = /^\/uploads\/[a-f0-9-]+\.(?:webp|png|jpe?g)$/.test(photo.url);
+  const isDataUrl = /^data:image\/(?:webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(photo.url);
+  if (!isUploadPath && !isDataUrl) {
     throw new Error('One of the photos is not valid. Please upload it again.');
   }
   return {

@@ -494,17 +494,36 @@ function randomSet(array) { return array[Math.floor(Math.random() * array.length
 
 async function compressImage(file) {
   if (!file.type.startsWith('image/')) throw new Error('That file doesn’t look like a photo. Choose a JPG, PNG or WebP image.');
-  if (file.size > 15 * 1024 * 1024) throw new Error('That photo is a little too large. Choose one under 15 MB.');
-  const source = await createImageBitmap(file);
-  const scale = Math.min(1, 960 / Math.max(source.width, source.height));
+  if (file.size > 20 * 1024 * 1024) throw new Error('That photo is a little too large. Choose one under 20 MB.');
+  let source;
+  if (typeof createImageBitmap === 'function') {
+    try { source = await createImageBitmap(file); } catch { /* fallback to Image element */ }
+  }
+  if (!source) {
+    source = await new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('This photo couldn’t be read.')); };
+      img.src = url;
+    });
+  }
+  const srcWidth = source.naturalWidth || source.width;
+  const srcHeight = source.naturalHeight || source.height;
+  const scale = Math.min(1, 960 / Math.max(srcWidth, srcHeight));
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(source.width * scale)); canvas.height = Math.max(1, Math.round(source.height * scale));
+  canvas.width = Math.max(1, Math.round(srcWidth * scale));
+  canvas.height = Math.max(1, Math.round(srcHeight * scale));
   const context = canvas.getContext('2d', { alpha: false });
-  context.drawImage(source, 0, 0, canvas.width, canvas.height); source.close();
-  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .75));
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  if (typeof source.close === 'function') source.close();
+  let blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .75));
+  if (!blob) blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .75));
   if (!blob) throw new Error('This photo couldn’t be prepared. Please try another.');
   return await new Promise((resolve, reject) => {
-    const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('This photo couldn’t be read.'));
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('This photo couldn’t be read.'));
     reader.readAsDataURL(blob);
   });
 }
@@ -518,8 +537,22 @@ async function uploadFiles(fileList) {
     try {
       const dataUrl = await compressImage(file);
       if (status) status.textContent = `Adding photo ${index + 1} of ${files.length}…`;
-      const result = await api('/api/uploads', { method: 'POST', body: JSON.stringify({ dataUrl }) });
-      form.photos.push({ ...result.photo, alt: `${form.recipientName || 'Birthday'} memory` });
+      let photoObj = {
+        url: dataUrl,
+        alt: `${form.recipientName || 'Birthday'} memory`,
+        caption: '',
+        year: '',
+        memory: ''
+      };
+      try {
+        const result = await api('/api/uploads', { method: 'POST', body: JSON.stringify({ dataUrl }) });
+        if (result && result.photo && result.photo.url) {
+          photoObj = { ...photoObj, ...result.photo };
+        }
+      } catch (uploadErr) {
+        console.warn('API upload fallback to direct dataUrl:', uploadErr.message);
+      }
+      form.photos.push(photoObj);
       saveDraft();
       if (location.pathname === '/create' || location.pathname.startsWith('/edit/')) { root.innerHTML = wizardPage(); updateLivePreview(); }
     } catch (error) { toast(error.message || 'Oops! That photo didn’t upload. Try again ♡', true); }

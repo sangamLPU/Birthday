@@ -1,22 +1,9 @@
 {
   "version": 2,
-  "functions": {
-    "api/index.js": {
-      "includeFiles": "public/**"
-    }
-  },
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api"
-    },
-    {
-      "source": "/uploads/(.*)",
-      "destination": "/api"
-    },
-    {
       "source": "/birthday/(.*)",
-      "destination": "/api"
+      "destination": "/index.html"
     },
     {
       "source": "/create",
