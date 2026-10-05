@@ -280,7 +280,9 @@ function validImage(buffer, type) {
 }
 
 async function handleApi(req, res, url) {
-  if (url.pathname === '/api/health' && req.method === 'GET') return json(res, 200, { ok: true });
+  if (url.pathname === '/api/health' && req.method === 'GET') {
+    return json(res, 200, { ok: true, storage: kvUrl && kvToken ? 'upstash-redis' : 'local' });
+  }
 
   if (url.pathname === '/api/uploads' && req.method === 'POST') {
     const input = await bodyJson(req);
