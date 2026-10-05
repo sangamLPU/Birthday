@@ -28,8 +28,21 @@ const mimeTypes = {
   '.ico': 'image/x-icon', '.json': 'application/json; charset=utf-8'
 };
 
-const kvUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const kvToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+function getKvConfig() {
+  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+    return { url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN };
+  }
+  if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+    return { url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN };
+  }
+  const envKeys = Object.keys(process.env);
+  const urlKey = envKeys.find(k => k.includes('REST_API_URL') || (k.includes('UPSTASH') && k.endsWith('_URL')) || k.endsWith('_REST_URL'));
+  const tokenKey = envKeys.find(k => k.includes('REST_API_TOKEN') || (k.includes('UPSTASH') && k.endsWith('_TOKEN')) || k.endsWith('_REST_TOKEN'));
+  if (urlKey && tokenKey) {
+    return { url: process.env[urlKey], token: process.env[tokenKey] };
+  }
+  return { url: '', token: '' };
+}
 
 async function ensureStorage() {
   try { await mkdir(uploadDir, { recursive: true }); }
@@ -37,6 +50,7 @@ async function ensureStorage() {
 }
 
 async function readDatabase() {
+  const { url: kvUrl, token: kvToken } = getKvConfig();
   if (kvUrl && kvToken) {
     try {
       const res = await fetch(`${kvUrl}/get/birthdays`, {
@@ -61,6 +75,7 @@ async function readDatabase() {
 }
 
 async function writeDatabase(rows) {
+  const { url: kvUrl, token: kvToken } = getKvConfig();
   if (kvUrl && kvToken) {
     try {
       await fetch(`${kvUrl}/set/birthdays`, {
@@ -83,6 +98,7 @@ async function writeDatabase(rows) {
 }
 
 async function getBirthdayBySlug(slug) {
+  const { url: kvUrl, token: kvToken } = getKvConfig();
   if (kvUrl && kvToken) {
     try {
       const res = await fetch(`${kvUrl}/get/birthday:${encodeURIComponent(slug)}`, {
@@ -101,6 +117,7 @@ async function getBirthdayBySlug(slug) {
 }
 
 async function saveBirthdayRecord(row) {
+  const { url: kvUrl, token: kvToken } = getKvConfig();
   if (kvUrl && kvToken) {
     try {
       await fetch(`${kvUrl}/set/birthday:${encodeURIComponent(row.slug)}`, {
@@ -115,6 +132,7 @@ async function saveBirthdayRecord(row) {
 }
 
 async function deleteBirthdayRecord(slug) {
+  const { url: kvUrl, token: kvToken } = getKvConfig();
   if (kvUrl && kvToken) {
     try {
       await fetch(`${kvUrl}/del/birthday:${encodeURIComponent(slug)}`, {
@@ -281,7 +299,15 @@ function validImage(buffer, type) {
 
 async function handleApi(req, res, url) {
   if (url.pathname === '/api/health' && req.method === 'GET') {
-    return json(res, 200, { ok: true, storage: kvUrl && kvToken ? 'upstash-redis' : 'local' });
+    const { url: kvUrl } = getKvConfig();
+    const detectedKeys = Object.keys(process.env).filter(k =>
+      k.includes('KV') || k.includes('REDIS') || k.includes('UPSTASH')
+    );
+    return json(res, 200, {
+      ok: true,
+      storage: kvUrl ? 'upstash-redis' : 'local',
+      detectedKeys
+    });
   }
 
   if (url.pathname === '/api/uploads' && req.method === 'POST') {
