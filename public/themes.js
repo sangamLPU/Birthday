@@ -1,3 +1,4 @@
+import { relationshipLanguage, safePhotoUrl } from './relationship.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 
 export const themes = [
@@ -37,7 +38,7 @@ const covers = {
 function renderLetter(id, c) {
   const title = { strawberry: 'The note', sakura: 'A note left in the garden', teddy: 'A note to keep', cloud: 'A very important note', bunny: 'Birthday mail', candy: 'For the birthday regular', starry: 'Incoming transmission' }[id];
   const greeting = { strawberry: `DEAR ${c.fullName.toUpperCase()},`, sakura: `Dear ${c.fullName},`, teddy: `Dear ${c.fullName},`, cloud: `FOR ${c.fullName.toUpperCase()}`, bunny: `DEAR ${c.fullName.toUpperCase()},`, candy: `ORDER UP FOR ${c.fullName.toUpperCase()}`, starry: `✦ FOR ${c.fullName.toUpperCase()}` }[id];
-  return `<section class="story-scene note-scene note-${id}" id="story-letter"><div class="scene-overline">${esc(greeting)}</div><h2>${esc(title)}</h2><p class="experience-message">${esc(c.story.letter || c.message)}</p><p class="scene-signoff">${esc(c.story.signature || 'With all my heart.')}</p></section>`;
+  return `<section class="story-scene note-scene note-${id}" id="story-letter"><div class="scene-overline">${esc(greeting)}</div><h2>${esc(title)}</h2><p class="experience-message">${esc(c.story.letter || c.message)}</p><p class="scene-signoff">${esc(c.story.signature || c.language.signature)}</p></section>`;
 }
 
 function renderMemories(id, c) {
@@ -47,7 +48,7 @@ function renderMemories(id, c) {
 
 function renderReasons(id, c) {
   if (!c.story.reasons.length) return '';
-  return `<section class="story-scene reasons-scene reasons-${id}" id="story-reasons"><div class="scene-overline">A SHORT LIST, WITH NO END</div><h2>Little things I love about you.</h2><div class="reason-stack">${c.story.reasons.map((reason, index) => `<button class="reason-card" type="button" data-action="reason-reveal" aria-expanded="false"><span class="reason-front"><small>0${index + 1} · TAP TO OPEN</small><strong>${id === 'starry' ? 'a bright thing about you' : id === 'bunny' ? 'a note in the margin' : id === 'candy' ? 'today’s special' : 'one little reason'}</strong></span><span class="reason-back" aria-hidden="true">${esc(reason)}</span></button>`).join('')}</div></section>`;
+  return `<section class="story-scene reasons-scene reasons-${id}" id="story-reasons"><div class="scene-overline">A SHORT LIST, WITH NO END</div><h2>${esc(c.language.reasons)}</h2><div class="reason-stack">${c.story.reasons.map((reason, index) => `<button class="reason-card" type="button" data-action="reason-reveal" aria-expanded="false"><span class="reason-front"><small>0${index + 1} · OPEN</small><strong>${id === 'starry' ? 'a bright thing about you' : id === 'bunny' ? 'a note in the margin' : id === 'candy' ? 'today’s special' : 'one little reason'}</strong></span><span class="reason-back" aria-hidden="true">${esc(reason)}</span></button>`).join('')}</div></section>`;
 }
 
 function renderInsideJoke(id, c) {
@@ -76,9 +77,9 @@ function cake() {
 
 function renderFinale(id, c) {
   const style = c.customization.finaleStyle || (c.legacy ? 'cake' : 'theme');
-  if (style === 'quiet') return `<section class="story-scene finale-scene finale-${id} finale-quiet" id="story-finale"><div class="scene-overline">THE DAY IS YOURS</div><h2>${esc(c.story.closing || `Keep a little room for more good days, ${c.personName}.`)}</h2><p>${esc(c.story.signature || 'Made with love.')}</p></section>`;
+  if (style === 'quiet') return `<section class="story-scene finale-scene finale-${id} finale-quiet" id="story-finale"><div class="scene-overline">THE DAY IS YOURS</div><h2>${esc(c.story.closing || `Keep a little room for more good days, ${c.personName}.`)}</h2><p>${esc(c.story.signature || c.language.signature)}</p></section>`;
   const action = style === 'cake' && c.customization.showCake ? cake() : endings[id];
-  return `<section class="story-scene finale-scene finale-${id}" id="story-finale"><div class="scene-overline">A LAST LITTLE WISH</div><h2>${esc(c.story.closing || `May this next trip around the sun be kind to you, ${c.personName}.`)}</h2>${action}<p class="finale-complete-note" data-finale-note aria-live="polite" hidden>And that’s the whole story. I’m so glad you’re in mine. ✦</p></section>`;
+  return `<section class="story-scene finale-scene finale-${id}" id="story-finale"><div class="scene-overline">A LAST LITTLE WISH</div><h2>${esc(c.story.closing || `May this next trip around the sun be kind to you, ${c.personName}.`)}</h2>${action}<p class="finale-complete-note" data-finale-note aria-live="polite" hidden>${esc(c.language.completion)}</p></section>`;
 }
 
 function renderSecretMarker(id, text) {
@@ -88,7 +89,7 @@ function renderSecretMarker(id, text) {
 }
 
 function renderMusicPlayer(c) {
-  if (c.preview) return '';
+  if (c.preview || c.music.enabled !== true) return '';
   return `<aside class="birthday-music music-${c.id}" aria-label="Birthday soundtrack"><span class="player-glyph" aria-hidden="true">${{ strawberry: '◉', sakura: '✿', teddy: '▣', cloud: '▤', bunny: '♫', candy: '●', starry: '✧' }[c.id]}</span><span class="player-copy"><strong>${esc(c.track.name)}</strong><small>${esc(c.track.mood)} · original score</small></span><span class="music-visualizer" aria-hidden="true">${Array.from({ length: 7 }, () => '<i></i>').join('')}</span><button type="button" data-action="toggle-music" aria-label="Play birthday music" aria-pressed="false">▶</button><label class="sr-only" for="music-volume">Music volume</label><input id="music-volume" type="range" min="0" max="1" step=".05" value=".32" data-volume aria-label="Music volume"></aside>`;
 }
 
@@ -96,8 +97,9 @@ export function renderThemeExperience(themeId, birthday, { preview = false, trac
   const id = themes.some(theme => theme.id === themeId) ? themeId : 'strawberry';
   const theme = themes.find(item => item.id === id);
   const recipient = birthday.recipient || {};
-  const photos = Array.isArray(birthday.photos) ? birthday.photos : [];
-  const message = birthday.message?.text || 'Wishing you a day full of little joys, big laughs, and all the love you deserve.';
+  const photos = Array.isArray(birthday.photos) ? birthday.photos.filter(photo => safePhotoUrl(photo?.url)) : [];
+  const language = relationshipLanguage(recipient.relationship);
+  const message = birthday.message?.text || language.letter;
   const savedStory = birthday.story || {};
   const story = {
     intro: savedStory.intro || '',
@@ -118,7 +120,7 @@ export function renderThemeExperience(themeId, birthday, { preview = false, trac
   if (recipient.location && id !== 'starry') identityParts.push(recipient.location);
   const c = {
     id, personName: recipient.nickname || recipient.name || 'birthday star', fullName: recipient.name || 'Birthday Star',
-    name: esc(recipient.nickname || recipient.name || 'Birthday Star'), recipient, photos, story,
+    language, name: esc(recipient.nickname || recipient.name || 'Birthday Star'), recipient, photos, story,
     message, music: birthday.music || { enabled: false }, track, customization,
     intro: story.intro || '', showGallery: customization.showGallery !== false,
     preview, legacy: !birthday.story,

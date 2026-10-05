@@ -1,16 +1,15 @@
 import { createServer } from 'node:http';
+import { put, del } from '@vercel/blob';
+import sharp from 'sharp';
+import { production, storageDir, uploadDir, redisConfig, redis, durableReady, getBirthdayBySlug, storeBirthday, photoKey, rateLimit, ServiceError } from './storage.mjs';
+import { renderSocialImage } from './social.mjs';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, 'public');
-const storageDir = process.env.STORAGE_DIR
-  ? path.resolve(process.env.STORAGE_DIR)
-  : (process.env.VERCEL ? path.join('/tmp', 'storage') : path.join(root, 'storage'));
-const uploadDir = path.join(storageDir, 'uploads');
-const dbPath = path.join(storageDir, 'birthdays.json');
 const port = Number(process.env.PORT || 4173);
 const maxJsonBytes = 10 * 1024 * 1024;
 const allowedThemes = new Set(['strawberry', 'sakura', 'teddy', 'cloud', 'bunny', 'candy', 'starry']);
@@ -28,122 +27,7 @@ const mimeTypes = {
   '.ico': 'image/x-icon', '.json': 'application/json; charset=utf-8'
 };
 
-function getKvConfig() {
-  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-    return { url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN };
-  }
-  if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
-    return { url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN };
-  }
-  const envKeys = Object.keys(process.env);
-  const urlKey = envKeys.find(k => k.includes('REST_API_URL') || (k.includes('UPSTASH') && k.endsWith('_URL')) || k.endsWith('_REST_URL'));
-  const tokenKey = envKeys.find(k => k.includes('REST_API_TOKEN') || (k.includes('UPSTASH') && k.endsWith('_TOKEN')) || k.endsWith('_REST_TOKEN'));
-  if (urlKey && tokenKey) {
-    return { url: process.env[urlKey], token: process.env[tokenKey] };
-  }
-  return { url: '', token: '' };
-}
-
-async function ensureStorage() {
-  try { await mkdir(uploadDir, { recursive: true }); }
-  catch { /* storage folder already created or running in read-only environment */ }
-}
-
-async function readDatabase() {
-  const { url: kvUrl, token: kvToken } = getKvConfig();
-  if (kvUrl && kvToken) {
-    try {
-      const res = await fetch(`${kvUrl}/get/birthdays`, {
-        headers: { Authorization: `Bearer ${kvToken}` }
-      });
-      const data = await res.json();
-      if (data && data.result) {
-        const parsed = JSON.parse(data.result);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (err) {
-      console.error('KV read error:', err.message);
-    }
-  }
-  try {
-    const rows = JSON.parse(await readFile(dbPath, 'utf8'));
-    return Array.isArray(rows) ? rows : [];
-  } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  }
-}
-
-async function writeDatabase(rows) {
-  const { url: kvUrl, token: kvToken } = getKvConfig();
-  if (kvUrl && kvToken) {
-    try {
-      await fetch(`${kvUrl}/set/birthdays`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${kvToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(JSON.stringify(rows))
-      });
-    } catch (err) {
-      console.error('KV write error:', err.message);
-    }
-  }
-  await ensureStorage();
-  try {
-    const tempPath = `${dbPath}.${randomBytes(5).toString('hex')}.tmp`;
-    await writeFile(tempPath, JSON.stringify(rows, null, 2), { encoding: 'utf8', flag: 'wx' });
-    await rename(tempPath, dbPath);
-  } catch (err) {
-    if (!kvUrl) console.error('Disk write error:', err.message);
-  }
-}
-
-async function getBirthdayBySlug(slug) {
-  const { url: kvUrl, token: kvToken } = getKvConfig();
-  if (kvUrl && kvToken) {
-    try {
-      const res = await fetch(`${kvUrl}/get/birthday:${encodeURIComponent(slug)}`, {
-        headers: { Authorization: `Bearer ${kvToken}` }
-      });
-      const data = await res.json();
-      if (data && data.result) {
-        return typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
-      }
-    } catch (err) {
-      console.error('KV read slug error:', err.message);
-    }
-  }
-  const rows = await readDatabase();
-  return rows.find(r => r.slug === slug);
-}
-
-async function saveBirthdayRecord(row) {
-  const { url: kvUrl, token: kvToken } = getKvConfig();
-  if (kvUrl && kvToken) {
-    try {
-      await fetch(`${kvUrl}/set/birthday:${encodeURIComponent(row.slug)}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${kvToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(JSON.stringify(row))
-      });
-    } catch (err) {
-      console.error('KV save slug error:', err.message);
-    }
-  }
-}
-
-async function deleteBirthdayRecord(slug) {
-  const { url: kvUrl, token: kvToken } = getKvConfig();
-  if (kvUrl && kvToken) {
-    try {
-      await fetch(`${kvUrl}/del/birthday:${encodeURIComponent(slug)}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${kvToken}` }
-      });
-    } catch (err) {
-      console.error('KV delete slug error:', err.message);
-    }
-  }
-}
+async function ensureStorage() { await mkdir(uploadDir, { recursive: true }); }
 
 function json(res, status, body) {
   const payload = JSON.stringify(body);
@@ -160,10 +44,28 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 }
 
-async function cleanupUnusedPhotos(photoUrls, rows) {
-  const used = new Set(rows.flatMap(row => (row.photos || []).map(photo => photo.url)));
-  const unused = [...new Set(photoUrls)].filter(photoUrl => !used.has(photoUrl));
-  await Promise.all(unused.map(photoUrl => unlink(path.join(uploadDir, path.basename(photoUrl))).catch(() => { })));
+function trustedBlobUrl(value) {
+  try {
+    const url = new URL(value);
+    const host = process.env.BLOB_PUBLIC_HOSTNAME?.toLowerCase();
+    return Boolean(host && /^[a-z0-9-]+\.public\.blob\.vercel-storage\.com$/.test(host) && url.protocol === 'https:' && url.hostname === host && !url.port && !url.username && !url.password && !url.search && !url.hash && /^\/birthdays\/[a-f0-9-]+\.(?:webp|png|jpe?g)$/.test(url.pathname));
+  } catch { return false; }
+}
+
+async function cleanupUnusedPhotos(previous, updated) {
+  const retained = new Set((updated?.photos || []).map(photo => photo.url));
+  for (const url of new Set((previous.photos || []).map(photo => photo.url))) {
+    if (retained.has(url)) continue;
+    try {
+      if (trustedBlobUrl(url) && redisConfig() && await redis(['GET', photoKey(url)]) === `deleting:${previous.slug}`) {
+        await del(url, { token: process.env.BLOB_READ_WRITE_TOKEN });
+        // Keep the deleting marker: an old copied URL must never become attachable again.
+      } else if (!redisConfig() && /^\/uploads\/[a-f0-9-]+\.(?:webp|png|jpe?g)$/.test(url)) {
+        const rows = JSON.parse(await readFile(path.join(storageDir, 'birthdays.json'), 'utf8'));
+        if (!rows.some(row => (row.photos || []).some(photo => photo.url === url))) await unlink(path.join(uploadDir, path.basename(url)));
+      }
+    } catch { console.warn('Photo cleanup deferred.'); } // record mutation already succeeded; never expose provider errors
+  }
 }
 
 function cleanText(value, maxLength, field) {
@@ -179,7 +81,7 @@ function safePhoto(photo) {
   }
   const isUploadPath = /^\/uploads\/[a-f0-9-]+\.(?:webp|png|jpe?g)$/.test(photo.url);
   const isDataUrl = /^data:image\/(?:webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(photo.url);
-  if (!isUploadPath && !isDataUrl) {
+  if (!isUploadPath && !isDataUrl && !trustedBlobUrl(photo.url)) {
     throw new Error('One of the photos is not valid. Please upload it again.');
   }
   return {
@@ -243,7 +145,7 @@ function normalizeBirthday(input) {
     story: storyData,
     themeId,
     photos,
-    music: { trackId, enabled: music.enabled === true },
+    music: { trackId, enabled: music.enabled === true, automatic: music.automatic === true },
     customization: {
       animationIntensity: ['low', 'normal', 'high'].includes(customization.animationIntensity) ? customization.animationIntensity : 'normal',
       showConfetti: customization.showConfetti !== false,
@@ -257,7 +159,7 @@ function normalizeBirthday(input) {
 }
 
 function publicRecord(row) {
-  const { editTokenHash, ...publicData } = row;
+  const { editTokenHash, editToken, ...publicData } = row;
   return publicData;
 }
 
@@ -268,7 +170,7 @@ function hashToken(value) {
 function authorized(row, value) {
   if (!row || typeof value !== 'string' || value.length < 32) return false;
   const supplied = hashToken(value);
-  const expected = Buffer.from(row.editTokenHash, 'hex');
+  const expected = Buffer.from(typeof row.editTokenHash === 'string' ? row.editTokenHash : '', 'hex');
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
@@ -279,15 +181,26 @@ function slugPart(name) {
 }
 
 async function bodyJson(req) {
+  // Vercel's Node helpers may already have parsed/consumed the request stream.
+  if (req.body !== undefined) {
+    try {
+      const encoded = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      if (Buffer.byteLength(encoded) > maxJsonBytes) throw new ServiceError('This upload is too large. Try a smaller photo.', 413);
+      return JSON.parse(encoded);
+    } catch (error) {
+      if (error instanceof ServiceError) throw error;
+      throw new ServiceError('The request could not be read. Please try again.', 400);
+    }
+  }
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > maxJsonBytes) throw new Error('This upload is too large. Try a smaller photo.');
+    if (size > maxJsonBytes) throw new ServiceError('This upload is too large. Try a smaller photo.', 413);
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch { throw new Error('The request could not be read. Please try again.'); }
+  catch { throw new ServiceError('The request could not be read. Please try again.', 400); }
 }
 
 function validImage(buffer, type) {
@@ -299,28 +212,38 @@ function validImage(buffer, type) {
 
 async function handleApi(req, res, url) {
   if (url.pathname === '/api/health' && req.method === 'GET') {
-    const { url: kvUrl } = getKvConfig();
-    const detectedKeys = Object.keys(process.env).filter(k =>
-      k.includes('KV') || k.includes('REDIS') || k.includes('UPSTASH')
-    );
-    return json(res, 200, {
-      ok: true,
-      storage: kvUrl ? 'upstash-redis' : 'local',
-      detectedKeys
+    const ready = await durableReady();
+    return json(res, production && !ready ? 503 : 200, {
+      ok: !production || ready, storage: redisConfig() ? 'upstash-redis' : production ? 'unavailable' : 'local-filesystem', durableStorageReady: ready
     });
   }
 
   if (url.pathname === '/api/uploads' && req.method === 'POST') {
+    await rateLimit(req, res, 'upload');
     const input = await bodyJson(req);
     if (typeof input.dataUrl !== 'string') return json(res, 400, { error: 'Choose a photo to upload.' });
     const match = input.dataUrl.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/=]+)$/);
     if (!match) return json(res, 400, { error: 'Use a JPG, PNG, or WebP photo.' });
     const type = match[1];
     const bytes = Buffer.from(match[2], 'base64');
-    if (bytes.length > 8 * 1024 * 1024) return json(res, 413, { error: 'That photo is too large. Try a smaller image.' });
+    if (bytes.length > 2 * 1024 * 1024) return json(res, 413, { error: 'That photo is too large. Try a smaller image.' });
     if (!validImage(bytes, type)) return json(res, 400, { error: 'That image could not be read. Please choose another.' });
-    if (process.env.VERCEL) {
-      return json(res, 201, { photo: { url: input.dataUrl, alt: 'Birthday memory' } });
+    // Decode as well as checking the signature; bound decompression before accepting bytes.
+    try { await sharp(bytes, { limitInputPixels: 16_000_000 }).resize(1, 1).raw().toBuffer(); }
+    catch { return json(res, 400, { error: 'That image could not be read. Please choose another.' }); }
+    if (production || process.env.BLOB_READ_WRITE_TOKEN) {
+      if (!process.env.BLOB_READ_WRITE_TOKEN || !process.env.BLOB_PUBLIC_HOSTNAME || !redisConfig()) throw new ServiceError('Photo uploads are temporarily unavailable. You can still create a page without photos.');
+      let blob;
+      try {
+        const extension = type === 'image/jpeg' ? 'jpg' : type.slice(6);
+        blob = await put(`birthdays/${randomUUID()}.${extension}`, bytes, { access: 'public', addRandomSuffix: false, contentType: type, token: process.env.BLOB_READ_WRITE_TOKEN });
+        if (!trustedBlobUrl(blob.url)) throw new Error('Unexpected Blob host');
+        if (await redis(['SET', photoKey(blob.url), 'pending']) !== 'OK') throw new ServiceError();
+      } catch {
+        if (blob?.url && trustedBlobUrl(blob.url)) { try { await del(blob.url); } catch { /* retry via store administration */ } }
+        throw new ServiceError('That photo could not be saved. Please try again, or continue without photos.');
+      }
+      return json(res, 201, { photo: { url: blob.url, alt: 'Birthday memory' } });
     }
     await ensureStorage();
     const extension = type === 'image/jpeg' ? 'jpg' : type.slice(6);
@@ -330,76 +253,90 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === '/api/birthdays' && req.method === 'POST') {
+    await rateLimit(req, res, 'create');
     const input = await bodyJson(req);
     let normalized;
     try { normalized = normalizeBirthday(input.birthday); }
     catch (error) { return json(res, 400, { error: error.message }); }
-    const rows = await readDatabase();
-    let slug;
-    do { slug = `${slugPart(normalized.recipient.name)}-${randomBytes(4).toString('hex')}`; }
-    while (rows.some(row => row.slug === slug));
+    const slug = `${slugPart(normalized.recipient.name)}-${randomBytes(16).toString('base64url')}`;
     const editToken = randomBytes(32).toString('base64url');
     const now = new Date().toISOString();
     const row = { id: randomUUID(), slug, ...normalized, editTokenHash: hashToken(editToken).toString('hex'), createdAt: now, updatedAt: now };
-    rows.push(row);
-    await writeDatabase(rows);
-    await saveBirthdayRecord(row);
+    await storeBirthday(row, null, row.photos.map(photo => photo.url).filter(trustedBlobUrl));
     return json(res, 201, { birthday: publicRecord(row), editToken });
   }
 
-  const match = url.pathname.match(/^\/api\/birthdays\/([a-z0-9-]+)(?:\/(edit))?$/);
+  const match = url.pathname.match(/^\/api\/birthdays\/([A-Za-z0-9_-]+)(?:\/(edit))?$/);
   if (match) {
     const [, slug, editPath] = match;
+    await rateLimit(req, res, req.method === 'GET' && !editPath ? 'read' : 'manage');
     const row = await getBirthdayBySlug(slug);
     if (req.method === 'GET' && !editPath) return row ? json(res, 200, { birthday: publicRecord(row) }) : json(res, 404, { error: 'This birthday surprise could not be found.' });
     if (req.method === 'GET' && editPath) {
-      if (!authorized(row, req.headers['x-edit-token'])) return json(res, 403, { error: 'This private edit link is not available on this device.' });
+      if (!authorized(row, req.headers['x-edit-token'])) return json(res, 403, { error: 'Use the private edit link saved by the creator to manage this page.' });
       return json(res, 200, { birthday: publicRecord(row) });
     }
     if (req.method === 'PATCH' && !editPath) {
-      if (!authorized(row, req.headers['x-edit-token'])) return json(res, 403, { error: 'This page can only be changed from its creator’s device.' });
+      if (!authorized(row, req.headers['x-edit-token'])) return json(res, 403, { error: 'Use the creator’s private edit link to change this page.' });
       const input = await bodyJson(req);
       let normalized;
       try { normalized = normalizeBirthday(input.birthday); }
       catch (error) { return json(res, 400, { error: error.message }); }
-      const rows = await readDatabase();
-      const index = rows.findIndex(r => r.slug === slug);
-      const replacedPhotos = (row.photos || []).map(photo => photo.url);
       const updated = { ...row, ...normalized, updatedAt: new Date().toISOString() };
-      if (index >= 0) rows[index] = updated; else rows.push(updated);
-      await writeDatabase(rows);
-      await saveBirthdayRecord(updated);
-      await cleanupUnusedPhotos(replacedPhotos, rows);
+      const blobPhotos = [...new Set([...row.photos || [], ...updated.photos].map(photo => photo.url).filter(trustedBlobUrl))];
+      await storeBirthday(updated, row, blobPhotos);
+      await cleanupUnusedPhotos(row, updated);
       return json(res, 200, { birthday: publicRecord(updated) });
     }
     if (req.method === 'DELETE' && !editPath) {
       if (!authorized(row, req.headers['x-edit-token'])) return json(res, 403, { error: 'This page can only be removed by its creator.' });
-      const rows = await readDatabase();
-      const index = rows.findIndex(r => r.slug === slug);
-      if (index >= 0) rows.splice(index, 1);
-      await writeDatabase(rows);
-      await deleteBirthdayRecord(slug);
-      await cleanupUnusedPhotos((row?.photos || []).map(photo => photo.url), rows);
+      await storeBirthday(null, row, (row.photos || []).map(photo => photo.url).filter(trustedBlobUrl));
+      await cleanupUnusedPhotos(row, null);
       return json(res, 200, { ok: true });
     }
   }
   return json(res, 404, { error: 'That page could not be found.' });
 }
 
+function publicOrigin(req) {
+  if (process.env.PUBLIC_ORIGIN) {
+    const origin = new URL(process.env.PUBLIC_ORIGIN);
+    if (origin.protocol !== 'https:' && production) throw new ServiceError();
+    return origin.origin;
+  }
+  const host = req.headers.host;
+  if (typeof host !== 'string' || !/^[a-zA-Z0-9.-]+(?::[0-9]+)?$/.test(host)) throw new ServiceError();
+  return `${production ? 'https' : 'http'}://${host}`;
+}
+
 async function serveStatic(req, res, url) {
-  if (url.pathname.startsWith('/api/')) return handleApi(req, res, url);
-  const birthdayRoute = url.pathname.match(/^\/birthday\/([a-z0-9-]+)$/);
-  if (birthdayRoute && (req.method === 'GET' || req.method === 'HEAD')) {
-    const [birthday, shell] = await Promise.all([getBirthdayBySlug(birthdayRoute[1]), readFile(path.join(publicDir, 'index.html'), 'utf8')]);
-    let document = shell;
+  if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/social/')) return handleApi(req, res, url);
+  const socialRoute = url.pathname.match(/^\/api\/social\/([A-Za-z0-9_-]+)\.png$/);
+  const birthdayRoute = url.pathname.match(/^\/birthday\/([A-Za-z0-9_-]+)$/);
+  if ((birthdayRoute || socialRoute) && (req.method === 'GET' || req.method === 'HEAD')) {
+    await rateLimit(req, res, 'read');
+    const slug = (birthdayRoute || socialRoute)[1];
+    const birthday = await getBirthdayBySlug(slug);
+    if (socialRoute) {
+      if (!birthday) { res.writeHead(404, { 'cache-control': 'no-store' }); return res.end('Not found'); }
+      const content = await renderSocialImage(birthday, { trustedBlobUrl, uploadDir });
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': content.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow' });
+      return req.method === 'HEAD' ? res.end() : res.end(content);
+    }
+    let document = await readFile(path.join(publicDir, 'index.html'), 'utf8');
     if (birthday) {
       const title = escapeHtml(`Happy Birthday ${birthday.recipient.name} 🎂`);
-      const description = escapeHtml(`Someone made ${birthday.recipient.name} a special birthday surprise.`);
+      const description = escapeHtml(`Someone made ${birthday.recipient.name} a little birthday story to open.`);
+      const origin = publicOrigin(req);
+      const pageUrl = escapeHtml(`${origin}/birthday/${slug}`);
+      const image = escapeHtml(`${origin}/api/social/${slug}.png`);
       document = document.replace(/<title>[\s\S]*?<\/title>/i, `<title>${title}</title>`)
-        .replace('</head>', `<meta property="og:title" content="${title}"><meta property="og:description" content="${description}"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="${title}"><meta name="twitter:description" content="${description}"></head>`);
+        .replace(/<meta name="description"[^>]*>/i, `<meta name="description" content="${description}">`)
+        .replace('</head>', `<meta property="og:title" content="${title}"><meta property="og:description" content="${description}"><meta property="og:image" content="${image}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:url" content="${pageUrl}"><meta property="og:type" content="website"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${title}"><meta name="twitter:description" content="${description}"><meta name="twitter:image" content="${image}"></head>`);
     }
+    document = document.replace('</head>', '<meta name="robots" content="noindex,nofollow"></head>');
     const content = Buffer.from(document);
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': content.length, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+    res.writeHead(birthday ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', 'content-length': content.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow' });
     return req.method === 'HEAD' ? res.end() : res.end(content);
   }
   let filePath;
@@ -441,22 +378,25 @@ async function serveStatic(req, res, url) {
 
 export async function requestListener(req, res) {
   try {
-    const rawPath = req.headers['x-matched-path'] || req.url;
-    const url = new URL(rawPath, `http://${req.headers.host || 'localhost'}`);
+    const url = new URL(req.url, 'http://localhost');
+    // Explicit rewrite parameter used only for server-rendered public routes.
+    if (url.pathname === '/api/public' && url.searchParams.has('birthday')) url.pathname = `/birthday/${url.searchParams.get('birthday')}`;
+    if (url.pathname === '/api/public' && url.searchParams.has('upload')) url.pathname = `/uploads/${url.searchParams.get('upload')}`;
+    if (url.pathname === '/api/public' && url.searchParams.has('social')) url.pathname = `/api/social/${url.searchParams.get('social')}.png`;
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST' && req.method !== 'PATCH' && req.method !== 'DELETE') {
       res.writeHead(405, { allow: 'GET, HEAD, POST, PATCH, DELETE' }); return res.end();
     }
     await serveStatic(req, res, url);
   } catch (error) {
-    console.error('Request failed:', error.message);
-    if (!res.headersSent) json(res, 500, { error: 'The birthday magic hit a little bump. Please try again.' });
+    console.error('Birthday request failed.', { status: error.status || 500 });
+    if (!res.headersSent) json(res, error.status || 500, { error: error instanceof ServiceError ? error.message : 'The birthday magic hit a little bump. Please try again.' });
     else res.end();
   }
 }
 
 const server = createServer(requestListener);
 
-if (!process.env.VERCEL) {
+if (!process.env.VERCEL && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   server.listen(port, '0.0.0.0', () => console.log(`Birthday Spark is ready at http://localhost:${port}`));
 }
 

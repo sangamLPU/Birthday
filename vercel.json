@@ -1,10 +1,17 @@
 {
   "version": 2,
+  "framework": null,
+  "outputDirectory": "public",
+  "functions": {
+    "api/*.js": { "includeFiles": "{public,assets,storage/uploads}/**", "maxDuration": 30 }
+  },
   "rewrites": [
     {
       "source": "/birthday/(.*)",
-      "destination": "/index.html"
+      "destination": "/api/public?birthday=$1"
     },
+    { "source": "/api/social/(.*).png", "destination": "/api/public?social=$1" },
+    { "source": "/uploads/(.*)", "destination": "/api/public?upload=$1" },
     {
       "source": "/create",
       "destination": "/index.html"

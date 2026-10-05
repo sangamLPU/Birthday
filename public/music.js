@@ -1,11 +1,11 @@
 export const musicCatalog = [
   { id: 'birthday_classic', name: 'Happy Birthday (Classic)', kind: 'Birthday · iconic melody, warm bells & keys', mood: 'Birthday' },
-  { id: 'romantic_ballad', name: "Can't Help Falling", kind: 'Romantic · sweet ballad chords, warm piano & strings', mood: 'Romantic' },
+  { id: 'romantic_ballad', name: 'A Quiet Kind of Love', kind: 'Romantic · sweet ballad chords, warm piano & strings', mood: 'Romantic' },
   { id: 'birthday_cheer', name: 'Birthday Party Cheer', kind: 'Birthday · festive brass & pop, party claps', mood: 'Birthday' },
   { id: 'candlelight_romance', name: 'Candlelight Romance', kind: 'Romantic · soft felt keys, intimate strings', mood: 'Romantic' },
   { id: 'make_a_wish', name: 'Make a Birthday Wish', kind: 'Birthday · dreamy music box, celestial sparkles', mood: 'Birthday' },
   { id: 'sweetheart_waltz', name: 'Sweetheart Love Waltz', kind: 'Romantic · romantic 3/4 waltz, piano & bells', mood: 'Romantic' },
-  { id: 'sunset_lofi', name: 'Lo-Fi Birthday Sunset', kind: 'Lo-Fi · chill tape keys, cozy dusty drums', mood: 'Lo-Fi' },
+  { id: 'sunset_lofi', name: 'Lo-Fi Birthday Sunset', kind: 'Lo-Fi · chill tape keys, cozy dusty drums', mood: 'Lo-fi' },
   { id: 'romance', name: 'A little closer', kind: 'Romantic · warm keys, soft strings', mood: 'Romantic' },
   { id: 'piano', name: 'Soft Piano Hug', kind: 'Cozy · piano-like keys, slow chords', mood: 'Cozy' },
   { id: 'sunshine', name: 'Sunny Birthday', kind: 'Energetic · plucked melody, bright rhythm', mood: 'Energetic' },
@@ -64,6 +64,7 @@ const bassProfiles = { soft: { wave: 'sine', level: .3, cutoff: 360 }, round: { 
 const themeCueNotes = { strawberry: 74, sakura: 78, teddy: 69, cloud: 81, bunny: 76, candy: 72, starry: 86 };
 const engine = { context: null, master: null, compressor: null, timer: null, active: null, volume: .32, nextTime: 0, step: 0, nodes: new Set(), noiseBuffer: null };
 let cueTimer;
+let playbackVersion = 0;
 
 function notify() {
   document.dispatchEvent(new CustomEvent('birthday-music-state', { detail: { trackId: engine.active, playing: Boolean(engine.active), volume: engine.volume } }));
@@ -197,11 +198,13 @@ function scheduleStep(score) {
 }
 
 export async function startMusic(trackId) {
+  const version = ++playbackVersion;
   if (!scores[trackId]) trackId = 'birthday_classic';
   const context = ensureContext();
   if (context.state === 'suspended') {
     await context.resume();
   }
+  if (version !== playbackVersion) return;
   if (engine.timer) clearInterval(engine.timer);
   engine.active = trackId;
   engine.step = 0;
@@ -227,6 +230,7 @@ export async function startMusic(trackId) {
 }
 
 export async function stopMusic() {
+  playbackVersion += 1;
   if (engine.timer) clearInterval(engine.timer);
   engine.timer = null;
   if (engine.context && engine.master) {
@@ -247,8 +251,10 @@ export function setMusicVolume(volume) {
 }
 
 export async function playInteractionSound(themeId, moment = 'open') {
+  const version = playbackVersion;
   const context = ensureContext();
   await context.resume();
+  if (version !== playbackVersion) return;
   if (!engine.active) {
     engine.master.gain.cancelScheduledValues(context.currentTime);
     engine.master.gain.setTargetAtTime(engine.volume, context.currentTime, .035);
@@ -278,15 +284,21 @@ export async function playInteractionSound(themeId, moment = 'open') {
 export async function suspendMusicForHiddenPage() {
   if (!engine.active || !engine.context) return;
   const trackId = engine.active;
-  await stopMusic();
+  const stopping = stopMusic();
+  const version = playbackVersion;
+  await stopping;
+  if (version !== playbackVersion) return;
   engine.active = trackId;
   await engine.context.suspend();
 }
 
 export async function resumeMusicForVisiblePage() {
+  const version = playbackVersion;
   if (!engine.active || !engine.context) return;
   const trackId = engine.active;
   await engine.context.resume();
+  if (version !== playbackVersion || engine.active !== trackId) return;
+  if (engine.timer) clearInterval(engine.timer);
   engine.master.gain.setTargetAtTime(engine.volume, engine.context.currentTime, .18);
   engine.step = 0;
   engine.nextTime = engine.context.currentTime + .08;

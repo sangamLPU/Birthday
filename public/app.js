@@ -1,3 +1,4 @@
+import { relationshipLanguage } from './relationship.js';
 import { renderThemeExperience, renderThemeMiniature, themes } from './themes.js';
 import { getActiveTrack, getMusicVolume, musicCatalog, playInteractionSound, setMusicVolume, startMusic, stopMusic, suspendMusicForHiddenPage, resumeMusicForVisiblePage } from './music.js';
 const themeCategories = [...new Set(themes.flatMap(theme => theme.categories))];
@@ -6,7 +7,7 @@ const defaultForm = () => ({
   recipientName: '', nickname: '', relationship: 'Friend', age: '', birthdayDate: '', location: '', personality: '',
   photos: [], message: '', messageSource: 'template', intro: '', reasons: [], insideJoke: '', surprise: '', secret: '', closing: '', signature: '',
   storyOrder: ['letter', 'memories', 'reasons', 'inside-joke', 'surprise'],
-  themeId: 'strawberry', musicTrack: 'birthday_classic', musicEnabled: true, musicAuto: true, animationIntensity: 'normal',
+  themeId: 'strawberry', musicTrack: 'elegant', musicEnabled: true, musicAuto: true, animationIntensity: 'normal',
   showConfetti: true, showCake: true, showGallery: true, finaleStyle: 'theme', soundEffects: true, tone: 'Sweet', length: 'Medium', context: ''
 });
 let favoriteThemeIds = new Set();
@@ -28,6 +29,11 @@ let previewMode = 'desktop';
 let birthdayRevealObserver;
 let memorySlideObserver;
 let memoryFocusOrigin = null;
+let musicArmController;
+const sessionTokens = new Map();
+let deleteFocusOrigin;
+let deleteDialog;
+let selectedMusicMood;
 const experienceProgress = new WeakMap();
 
 try {
@@ -35,12 +41,17 @@ try {
   if (saved && typeof saved === 'object') form = { ...defaultForm(), ...saved, photos: Array.isArray(saved.photos) ? saved.photos : [], reasons: Array.isArray(saved.reasons) ? saved.reasons : [], storyOrder: Array.isArray(saved.storyOrder) ? saved.storyOrder : defaultForm().storyOrder };
 } catch { /* a broken local draft should never block page creation */ }
 if (!themes.some(theme => theme.id === form.themeId)) form.themeId = 'strawberry';
+if (form.musicAuto) form.musicTrack = themes.find(theme => theme.id === form.themeId).defaultMusic;
 
 const root = document.querySelector('#app');
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const themeById = id => themes.find(theme => theme.id === id) || themes[0];
 const publicPath = slug => `/birthday/${encodeURIComponent(slug)}`;
 const tokenKey = slug => `birthday-spark-edit-${slug}`;
+const getEditToken = slug => { try { return sessionTokens.get(slug) || localStorage.getItem(tokenKey(slug)); } catch { return sessionTokens.get(slug); } };
+const rememberEditToken = (slug, token) => { sessionTokens.set(slug, token); try { localStorage.setItem(tokenKey(slug), token); } catch { /* recovery link remains available for this session */ } };
+const privateEditLink = slug => `${location.origin}/edit/${encodeURIComponent(slug)}#token=${encodeURIComponent(getEditToken(slug) || '')}`;
+
 const saveDraft = () => { try { localStorage.setItem('birthday-spark-draft', JSON.stringify(form)); } catch { /* private browsing can disable storage */ } };
 
 function encodeCardData(card) {
@@ -98,7 +109,10 @@ function updatePageMetadata(title, description) {
   document.querySelector('meta[name="description"]')?.setAttribute('content', description);
   setMeta('property', 'og:title', title);
   setMeta('property', 'og:description', description);
-  setMeta('name', 'twitter:card', 'summary');
+  const birthdayRoute = location.pathname.startsWith('/birthday/');
+  setMeta('name', 'twitter:card', birthdayRoute ? 'summary_large_image' : 'summary');
+  if (birthdayRoute) { const slug = location.pathname.slice('/birthday/'.length); setMeta('property', 'og:image', `${location.origin}/api/social/${slug}.png`); setMeta('name', 'twitter:image', `${location.origin}/api/social/${slug}.png`); setMeta('property', 'og:url', `${location.origin}${publicPath(slug)}`); setMeta('property', 'og:type', 'website'); setMeta('name', 'robots', 'noindex,nofollow'); }
+  else { document.querySelector('meta[name="robots"]')?.remove(); document.querySelector('meta[property="og:image"]')?.remove(); document.querySelector('meta[name="twitter:image"]')?.remove(); }
   setMeta('name', 'twitter:title', title);
   setMeta('name', 'twitter:description', description);
 }
@@ -115,7 +129,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { ...(options.body ? { 'content-type': 'application/json' } : {}), ...(options.headers || {}) } });
   let payload;
   try { payload = await response.json(); } catch { payload = {}; }
-  if (!response.ok) throw new Error(payload.error || 'Something went wrong. Please try again.');
+  if (!response.ok) { const error = new Error(payload.error || 'Something went wrong. Please try again.'); error.status = response.status; throw error; }
   return payload;
 }
 
@@ -170,26 +184,27 @@ function closeThemePreview() {
 function birthdayMarkup(birthday, { preview = false } = {}) {
   const themeId = themes.some(theme => theme.id === birthday.themeId) ? birthday.themeId : 'strawberry';
   const trackId = birthday.music?.trackId || themeById(themeId).defaultMusic || 'birthday_classic';
-  const music = { trackId, enabled: true };
+  const music = { ...birthday.music, trackId, enabled: birthday.music?.enabled === true };
   const track = musicCatalog.find(item => item.id === trackId) || musicCatalog[0];
   const settings = birthday.customization || { showConfetti: true, showCake: true, showGallery: true, soundEffects: true };
   const animationStyle = ['low', 'normal', 'high'].includes(settings.animationIntensity) ? settings.animationIntensity : 'normal';
   const experience = renderThemeExperience(themeId, { ...birthday, music }, { preview, track });
   const lightbox = `<div class="memory-lightbox" data-memory-lightbox hidden role="dialog" aria-modal="true" aria-label="A birthday memory"><button type="button" class="memory-lightbox-close" data-action="memory-close" aria-label="Close memory">×</button><button type="button" class="memory-lightbox-step previous" data-action="memory-modal-step" data-step="-1" aria-label="Previous memory">←</button><figure><img data-lightbox-image alt=""><figcaption><span data-lightbox-date></span><strong data-lightbox-caption></strong><span data-lightbox-note></span></figcaption></figure><button type="button" class="memory-lightbox-step next" data-action="memory-modal-step" data-step="1" aria-label="Next memory">→</button></div>`;
-  return `<article class="birthday-page theme-${themeId} animation-${animationStyle}${preview ? ' preview' : ''}" data-theme-page="${themeId}" data-confetti="${settings.showConfetti !== false}" data-sound-effects="${settings.soundEffects !== false}" data-finale-style="${esc(settings.finaleStyle || 'cake')}">${experience}${lightbox}</article>`;
+  return `<article class="birthday-page theme-${themeId} animation-${animationStyle}${preview ? ' preview' : ''}" data-theme-page="${themeId}" data-music-enabled="${music.enabled}" data-confetti="${settings.showConfetti !== false}" data-sound-effects="${music.enabled && settings.soundEffects !== false}" data-finale-style="${esc(settings.finaleStyle || 'cake')}">${experience}${lightbox}</article>`;
 }
 
 function armExperienceMusic(page) {
-  if (!page || page.classList.contains('preview')) return;
-  const onFirstInteraction = async () => {
-    window.removeEventListener('pointerdown', onFirstInteraction, { capture: true });
-    window.removeEventListener('keydown', onFirstInteraction, { capture: true });
-    if (!getActiveTrack()) {
-      await beginExperienceMusic(page);
-    }
+  musicArmController?.abort();
+  if (!page || page.classList.contains('preview') || page.dataset.musicEnabled !== 'true') return;
+  musicArmController = new AbortController();
+  const onFirstInteraction = event => {
+    // Let explicit music controls handle their own gesture, avoiding double toggles.
+    if (event.target.closest?.('[data-action="toggle-music"], [data-volume]')) { musicArmController.abort(); return; }
+    musicArmController.abort();
+    if (page.isConnected) beginExperienceMusic(page);
   };
-  window.addEventListener('pointerdown', onFirstInteraction, { capture: true, once: true });
-  window.addEventListener('keydown', onFirstInteraction, { capture: true, once: true });
+  window.addEventListener('pointerdown', onFirstInteraction, { capture: true, signal: musicArmController.signal });
+  window.addEventListener('keydown', onFirstInteraction, { capture: true, signal: musicArmController.signal });
 }
 
 function observeBirthdayReveals() {
@@ -244,9 +259,9 @@ function themeGalleryPage() {
 const stepsMeta = [
   { title: 'Who is this story for?', copy: 'A few details help the experience sound like it belongs to this one person.' },
   { title: 'Choose the moments to keep', copy: 'Add up to five photos, then give the ones you love a date or a little memory.' },
-  { title: 'Write what only you can say', copy: 'Start with your own words. You can add reasons, an inside joke, or a private note too.' },
+  { title: 'Write what only you can say', copy: 'Start with your own words. You can add reasons, an inside joke, or a tucked-away note too. Anyone with the page link can open it.' },
   { title: 'Choose their little world', copy: 'Each theme changes how the story opens, how memories appear, and what happens at the end.' },
-  { title: 'Set the mood', copy: 'Choose an original score, arrange the story, and decide how it should end.' }
+  { title: 'Set the mood', copy: 'Their world already has a recommended setup. You can create it now, or open the extra options.' }
 ];
 
 const sampleMessages = {
@@ -268,12 +283,7 @@ function makeMessage() {
   const list = messageFactory(name);
   let message = list[form.length === 'Short' ? 0 : 1];
   if (form.length === 'Short' || form.tone === 'Short & Cute') message = `Happy birthday, ${name}! You make life brighter just by being you. I hope your day is full of love, cake, and all your favorite things. ♡`;
-  const relationshipNote = {
-    Friend: 'I’m so glad life gave me a friend like you.', 'Best friend': 'I’m lucky to call you my best friend.',
-    Partner: 'I feel lucky to share all the little moments of life with you.', Sibling: 'Growing up alongside you gave me some of my favorite memories.',
-    Parent: 'Thank you for all the ways you have always shown up for me.', Cousin: 'I’m grateful for all the family memories we share.',
-    Colleague: 'It’s a joy to work alongside someone as thoughtful as you.', Other: 'I’m so glad our paths crossed.'
-  }[form.relationship];
+  const relationshipNote = relationshipLanguage(form.relationship).note;
   if (relationshipNote && form.tone !== 'Best Friend' && form.length !== 'Short') message += `\n\n${relationshipNote}`;
   if (form.length === 'Long') message += `\n\n${form.context.trim() ? `I keep thinking about ${form.context.trim()}.` : 'I’m so grateful for all the moments we’ve shared, and I can’t wait for the memories still ahead.'} I hope this new year brings you more reasons to laugh, more people who show up for you, and plenty of ordinary days that feel like a gift.`;
   else if (form.context.trim()) message += `\n\nI’ll always smile when I think about ${form.context.trim()}.`;
@@ -281,7 +291,7 @@ function makeMessage() {
 }
 
 function wizardStepContent() {
-  if (step === 0) return `<div class="field-stack"><div class="recipient-note"><strong>Start with the person, not the template.</strong><br>A nickname, birthday detail or familiar place can make the opening feel unmistakably theirs.</div><div class="field"><label for="recipient-name">Their name</label><input class="input" id="recipient-name" data-field="recipientName" maxlength="80" autocomplete="off" placeholder="e.g. Prachi" value="${esc(form.recipientName)}"><small>This is how their name will appear on the page.</small></div><div class="field-row"><div class="field"><label for="recipient-nickname">What you call them</label><input class="input" id="recipient-nickname" data-field="nickname" maxlength="48" placeholder="A nickname (optional)" value="${esc(form.nickname)}"></div><div class="field"><label for="relationship">They’re my…</label><select class="select" id="relationship" data-field="relationship">${relationships.map(item => `<option${form.relationship === item ? ' selected' : ''}>${esc(item)}</option>`).join('')}</select></div></div><details class="customize-details"><summary>A few details about them</summary><div class="customize-options"><div class="field-row"><div class="field"><label for="recipient-age">Age (optional)</label><input class="input" id="recipient-age" type="number" min="1" max="130" data-field="age" value="${esc(form.age)}" placeholder="e.g. 30"></div><div class="field"><label for="recipient-birthday">Birthday date</label><input class="input" id="recipient-birthday" type="date" data-field="birthdayDate" value="${esc(form.birthdayDate)}"></div></div><div class="field"><label for="recipient-place">A place that feels like them</label><input class="input" id="recipient-place" class="input" data-field="location" maxlength="100" placeholder="Their city, a favorite place…" value="${esc(form.location)}"></div><div class="field"><label for="recipient-personality">Their kind of energy</label><input class="input" id="recipient-personality" data-field="personality" maxlength="100" placeholder="e.g. quiet mischief, big-hearted, always dancing" value="${esc(form.personality)}"></div></div></details><p class="hint">These extra details are optional. The page is only shared with people who have its link.</p></div>`;
+  if (step === 0) return `<div class="field-stack"><div class="recipient-note"><strong>Start with the person, not the template.</strong><br>A nickname, birthday detail or familiar place can make the opening feel unmistakably theirs.</div><div class="field"><label for="recipient-name">Their name</label><input class="input" id="recipient-name" data-field="recipientName" maxlength="80" autocomplete="off" placeholder="e.g. Prachi" value="${esc(form.recipientName)}"><small>This is how their name will appear on the page.</small></div><div class="field-row"><div class="field"><label for="recipient-nickname">What you call them</label><input class="input" id="recipient-nickname" data-field="nickname" maxlength="48" placeholder="A nickname (optional)" value="${esc(form.nickname)}"></div><div class="field"><label for="relationship">They’re my…</label><select class="select" id="relationship" data-field="relationship">${relationships.map(item => `<option${form.relationship === item ? ' selected' : ''}>${esc(item)}</option>`).join('')}</select></div></div><details class="customize-details"><summary>A few details about them</summary><div class="customize-options"><div class="field-row"><div class="field"><label for="recipient-age">Age (optional)</label><input class="input" id="recipient-age" type="number" min="1" max="130" data-field="age" value="${esc(form.age)}" placeholder="e.g. 30"></div><div class="field"><label for="recipient-birthday">Birthday date</label><input class="input" id="recipient-birthday" type="date" data-field="birthdayDate" value="${esc(form.birthdayDate)}"></div></div><div class="field"><label for="recipient-place">A place that feels like them</label><input class="input" id="recipient-place" class="input" data-field="location" maxlength="100" placeholder="Their city, a favorite place…" value="${esc(form.location)}"></div><div class="field"><label for="recipient-personality">Their kind of energy</label><input class="input" id="recipient-personality" data-field="personality" maxlength="100" placeholder="e.g. quiet mischief, big-hearted, always dancing" value="${esc(form.personality)}"></div></div></details><p class="hint">These extra details are optional. Anyone with the link can view this birthday page, so avoid including anything you wouldn’t want forwarded.</p></div>`;
   if (step === 1) return `<div><label class="upload-zone" id="upload-zone" for="photo-input"><input class="sr-only" id="photo-input" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="Choose birthday photos"><span><span class="upload-icon" aria-hidden="true">＋</span><strong>Drop photos here, or browse</strong><p>JPG, PNG or WebP · up to 5 photos · resized before upload</p></span></label><p class="photo-status" id="photo-status" aria-live="polite">${form.photos.length ? `${form.photos.length} photo${form.photos.length === 1 ? '' : 's'} ready` : 'No photos yet — your story can be lovely without photos too.'}</p><div class="memory-editor-list">${form.photos.map((photo, index) => `<article class="memory-editor"><div class="memory-editor-photo"><img src="${esc(photo.url)}" alt="${esc(photo.alt || `Selected birthday photo ${index + 1}`)}" loading="lazy">${index === 0 ? '<span class="photo-primary-label">Opening photo</span>' : `<button class="photo-primary-button" type="button" data-action="make-cover" data-index="${index}">Make opening photo</button>`}<button class="photo-remove" type="button" data-action="remove-photo" data-index="${index}" aria-label="Remove photo ${index + 1}">×</button></div><details class="memory-caption-editor"><summary>Give this moment a little context</summary><div class="customize-options"><div class="field"><label>Caption</label><input class="input" data-photo-field="caption" data-photo-index="${index}" maxlength="100" placeholder="What was happening?" value="${esc(photo.caption || '')}"></div><div class="field"><label>Date or year</label><input class="input" data-photo-field="year" data-photo-index="${index}" maxlength="24" placeholder="e.g. Summer 2024" value="${esc(photo.year || '')}"></div><div class="field"><label>The bit you remember</label><textarea class="textarea" data-photo-field="memory" data-photo-index="${index}" maxlength="360" placeholder="A detail you would tell them when this photo comes up…">${esc(photo.memory || '')}</textarea></div></div></details></article>`).join('')}</div><div class="recipient-note" style="margin-top:18px"><strong>Photos become part of the story.</strong><br>They turn into a timeline, album or film strip depending on the theme you choose.</div></div>`;
   if (step === 2) {
     const name = form.nickname.trim() || form.recipientName.trim() || 'your favorite person';
@@ -296,11 +306,15 @@ function wizardStepContent() {
     const pickedTheme = themeById(form.themeId);
     return `<div><div class="chosen-experience"><span>YOUR CURRENT WORLD</span><strong>${esc(pickedTheme.name)}</strong><p>${esc(pickedTheme.description)} The opening: ${esc(pickedTheme.interaction.label.toLowerCase())}.</p></div><div class="chip-row" role="group" aria-label="Filter themes by style" style="margin-bottom:13px">${categories.map(item => `<button type="button" class="chip${category === item ? ' active' : ''}" data-action="filter-generator-themes" data-category="${esc(item)}" aria-pressed="${category === item}">${esc(item)}</button>`).join('')}</div><div class="theme-choice-grid">${available.map(theme => themeTile(theme, { compact: true, selected: form.themeId === theme.id })).join('')}</div></div>`;
   }
-  const selectableTracks = musicCatalog;
-  const track = musicCatalog.find(item => item.id === form.musicTrack) || musicCatalog.find(item => item.id === themeById(form.themeId).defaultMusic);
-  const sectionTitles = { letter: 'Your letter', memories: 'Photo memories', reasons: 'Reasons and wishes', 'inside-joke': 'Inside joke', surprise: 'Gift reveal' };
-  const ordered = [...form.storyOrder];
-  return `<div class="finish-editor"><div class="field"><label for="music-mood">A soundtrack mood</label><select id="music-mood" class="select" data-field="musicTrack">${selectableTracks.map(item => `<option value="${item.id}"${form.musicTrack === item.id ? ' selected' : ''}>${esc(item.name)} — ${esc(item.kind)}</option>`).join('')}</select><small>Each score has its own chords, tempo, bass, melody and instruments. It is composed in the browser and only starts after a tap.</small></div><div class="score-preview"><span class="score-glyph" aria-hidden="true">♫</span><div><strong>${esc(track.name)}</strong><small>${esc(track.kind)}</small></div><div class="score-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><button class="music-preview" type="button" data-action="preview-track" data-track-id="${track.id}" aria-pressed="${activeAudioTrack === track.id}">${activeAudioTrack === track.id ? 'Pause' : 'Listen'}</button></div><label class="check-row music-optin"><input type="checkbox" data-field="musicEnabled"${form.musicEnabled ? ' checked' : ''}> Include this score on their page</label><details class="customize-details story-path-editor"><summary>Arrange the story and ending</summary><div class="customize-options"><p class="hint">Use the arrows to change the order. Empty scenes are skipped automatically.</p><div class="story-order-list">${ordered.map((section, index) => `<div class="story-order-row"><label><input type="checkbox" data-story-section="${section}" checked> ${esc(sectionTitles[section] || section)}</label><div><button type="button" data-action="story-order" data-index="${index}" data-direction="-1" aria-label="Move ${esc(sectionTitles[section])} up"${index === 0 ? ' disabled' : ''}>↑</button><button type="button" data-action="story-order" data-index="${index}" data-direction="1" aria-label="Move ${esc(sectionTitles[section])} down"${index === ordered.length - 1 ? ' disabled' : ''}>↓</button></div></div>`).join('')}${Object.keys(sectionTitles).filter(section => !ordered.includes(section)).map(section => `<div class="story-order-row"><label><input type="checkbox" data-story-section="${section}"> ${esc(sectionTitles[section])}</label><span class="story-order-spacer">Add to story</span></div>`).join('')}</div><div class="field"><label for="finale-style">The last scene</label><select id="finale-style" class="select" data-field="finaleStyle"><option value="theme"${form.finaleStyle === 'theme' ? ' selected' : ''}>A finale that belongs to this theme</option><option value="cake"${form.finaleStyle === 'cake' ? ' selected' : ''}>Classic candles and a wish</option><option value="quiet"${form.finaleStyle === 'quiet' ? ' selected' : ''}>A quiet sign-off</option></select></div>${form.finaleStyle === 'cake' ? '<label class="check-row"><input type="checkbox" data-field="showCake" checked> Include the candle cake</label>' : `<label class="check-row"><input type="checkbox" data-field="showCake"${form.showCake ? ' checked' : ''}> Keep the candle cake available in the classic ending</label>`}<div class="field"><label for="animation-intensity">Motion</label><select id="animation-intensity" class="select" data-field="animationIntensity"><option value="low"${form.animationIntensity === 'low' ? ' selected' : ''}>Soft and subtle</option><option value="normal"${form.animationIntensity === 'normal' ? ' selected' : ''}>A little movement</option><option value="high"${form.animationIntensity === 'high' ? ' selected' : ''}>Party time</option></select></div><label class="check-row"><input type="checkbox" data-field="showConfetti"${form.showConfetti ? ' checked' : ''}> A little confetti at the ending</label><label class="check-row"><input type="checkbox" data-field="soundEffects"${form.soundEffects ? ' checked' : ''}> Soft interaction sounds</label><label class="check-row"><input type="checkbox" data-field="showGallery"${form.showGallery ? ' checked' : ''}> Include photo memories</label></div></details><div class="recipient-note" style="margin-top:19px"><strong>It is still your story.</strong><br>The recipient can read at their own pace, swipe through memories, and skip any interaction they do not feel like trying.</div></div>`;
+  const theme = themeById(form.themeId);
+  const track = musicCatalog.find(item => item.id === form.musicTrack) || musicCatalog.find(item => item.id === theme.defaultMusic);
+  const sectionTitles = { letter: 'Birthday letter', memories: 'Photo memories', reasons: 'Little reasons', 'inside-joke': 'Inside joke', surprise: 'A small surprise' };
+  const ordered = form.storyOrder.filter(section => sectionTitles[section]);
+  const moods = [...new Set(musicCatalog.map(item => item.mood))];
+  const mood = selectedMusicMood || track.mood;
+  const tracks = musicCatalog.filter(item => item.mood === mood);
+  return `<div class="finish-editor"><h3>Recommended setup</h3><div class="setup-summary"><div><strong>Soundtrack</strong><span>${form.musicEnabled ? esc(track.name) : 'A quiet birthday page'}</span></div><div><strong>Ending</strong><span>${form.finaleStyle === 'cake' ? 'Candles and a wish' : form.finaleStyle === 'quiet' ? 'A quiet sign-off' : 'Theme finale'}</span></div><div><strong>Motion</strong><span>${form.animationIntensity === 'low' ? 'Soft and subtle' : form.animationIntensity === 'high' ? 'Party time' : 'Normal'}</span></div></div><p class="hint">${form.musicAuto ? `Recommended for ${esc(theme.name)}` : 'Your selected score'}</p><div class="score-preview"><span class="score-glyph" aria-hidden="true">♫</span><div><strong>${esc(track.name)}</strong><small>${esc(track.kind)}</small></div><div class="score-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><button class="music-preview" type="button" data-action="preview-track" data-track-id="${track.id}" aria-pressed="${activeAudioTrack === track.id}">${activeAudioTrack === track.id ? 'Pause' : 'Listen'}</button></div><label class="check-row music-optin"><input type="checkbox" id="music-enabled" data-field="musicEnabled"${form.musicEnabled ? ' checked' : ''}> Include this score on their page</label><details id="finish-advanced" class="customize-details story-path-editor"><summary>Advanced options</summary><div class="customize-options"><details id="music-choices" class="customize-details"><summary>Change mood</summary><div class="customize-options"><div class="field"><label for="music-mood">Choose a mood</label><select id="music-mood" class="select" data-music-mood>${moods.map(item => `<option${item === mood ? ' selected' : ''}>${esc(item)}</option>`).join('')}</select></div><div class="field"><label for="music-track">Choose an original score</label><select id="music-track" class="select" data-field="musicTrack"><option value="" disabled${!tracks.some(item => item.id === form.musicTrack) ? ' selected' : ''}>Choose a score in this mood</option>${tracks.map(item => `<option value="${item.id}"${form.musicTrack === item.id ? ' selected' : ''}>${esc(item.name)} — ${esc(item.kind)}</option>`).join('')}</select></div><button type="button" class="text-link" data-action="recommended-track">Use the theme’s recommended soundtrack</button><p class="hint">All ${musicCatalog.length} scores play in your browser after a gesture. Listening here works even if their page has music turned off.</p></div></details></div><div class="customize-options"><p class="hint">Use the arrows to change the order. Empty scenes are skipped automatically.</p><div class="story-order-list">${ordered.map((section, index) => `<div class="story-order-row"><label><input type="checkbox" data-story-section="${section}" checked> ${esc(sectionTitles[section] || section)}</label><div><button type="button" data-action="story-order" data-index="${index}" data-direction="-1" aria-label="Move ${esc(sectionTitles[section])} up"${index === 0 ? ' disabled' : ''}>↑</button><button type="button" data-action="story-order" data-index="${index}" data-direction="1" aria-label="Move ${esc(sectionTitles[section])} down"${index === ordered.length - 1 ? ' disabled' : ''}>↓</button></div></div>`).join('')}${Object.keys(sectionTitles).filter(section => !ordered.includes(section)).map(section => `<div class="story-order-row"><label><input type="checkbox" data-story-section="${section}"> ${esc(sectionTitles[section])}</label><span class="story-order-spacer">Add to story</span></div>`).join('')}</div><div class="field"><label for="finale-style">The last scene</label><select id="finale-style" class="select" data-field="finaleStyle"><option value="theme"${form.finaleStyle === 'theme' ? ' selected' : ''}>A finale that belongs to this theme</option><option value="cake"${form.finaleStyle === 'cake' ? ' selected' : ''}>Classic candles and a wish</option><option value="quiet"${form.finaleStyle === 'quiet' ? ' selected' : ''}>A quiet sign-off</option></select></div><label class="check-row"><input type="checkbox" data-field="showCake"${form.showCake ? ' checked' : ''}> Include the candle cake in the classic ending</label><div class="field"><label for="animation-intensity">Motion</label><select id="animation-intensity" class="select" data-field="animationIntensity"><option value="low"${form.animationIntensity === 'low' ? ' selected' : ''}>Soft and subtle</option><option value="normal"${form.animationIntensity === 'normal' ? ' selected' : ''}>A little movement</option><option value="high"${form.animationIntensity === 'high' ? ' selected' : ''}>Party time</option></select></div><label class="check-row"><input type="checkbox" data-field="showConfetti"${form.showConfetti ? ' checked' : ''}> A little confetti at the ending</label><label class="check-row"><input type="checkbox" data-field="soundEffects"${form.soundEffects ? ' checked' : ''}> Soft interaction sounds</label><label class="check-row"><input type="checkbox" data-field="showGallery"${form.showGallery ? ' checked' : ''}> Include photo memories</label></div></details><div class="recipient-note" style="margin-top:19px"><strong>It is still your story.</strong><br>The recipient can read at their own pace, swipe through memories, and skip any interaction they do not feel like trying.</div></div>`;
+
 }
 
 function birthdayDraft() {
@@ -310,7 +324,7 @@ function birthdayDraft() {
     story: { intro: form.intro.trim(), letter: form.message.trim(), reasons: form.reasons.map(reason => reason.trim()).filter(Boolean), insideJoke: form.insideJoke.trim(), surprise: form.surprise.trim(), secret: form.secret.trim(), closing: form.closing.trim(), signature: form.signature.trim(), order: [...form.storyOrder] },
     themeId: form.themeId,
     photos: form.photos.map(photo => ({ url: photo.url, alt: photo.alt || `A birthday memory of ${form.recipientName}`, caption: photo.caption || '', year: photo.year || '', memory: photo.memory || '' })),
-    music: { trackId: form.musicTrack || 'birthday_classic', enabled: form.musicEnabled !== false },
+    music: { trackId: form.musicTrack || themeById(form.themeId).defaultMusic, enabled: form.musicEnabled !== false, automatic: form.musicAuto },
     customization: { animationIntensity: form.animationIntensity, showConfetti: form.showConfetti, showCake: form.showCake, showGallery: form.showGallery, finaleStyle: form.finaleStyle, soundEffects: form.soundEffects }
   };
 }
@@ -327,40 +341,99 @@ function updateLivePreview() {
 function wizardPage() {
   const meta = stepsMeta[step];
   const actionError = window.generatorError ? `<p class="inline-error" role="alert">${esc(window.generatorError)}</p>` : '';
-  return `${header()}<main class="generator-shell"><div class="shell"><div class="page-top" style="padding:0 0 16px"><a class="breadcrumb" href="/" data-navigate>← Back to Birthday Spark</a></div><div class="generator-heading"><div><h1>${editSlug ? 'Make a little update' : 'Let’s make their birthday page'}</h1><p>A few sweet details, then it’s ready to share. ♡</p></div><div class="generator-progress" aria-label="Step ${step + 1} of 5">${stepsMeta.map((_, index) => `<span class="progress-dot${index <= step ? ' active' : ''}" aria-hidden="true"></span>`).join('')}<span class="progress-label">${step + 1} of 5</span></div></div><div class="generator-layout"><section class="editor-panel" aria-labelledby="step-title"><h2 class="editor-step-heading" id="step-title" tabindex="-1">${meta.title}</h2><p class="editor-step-copy">${meta.copy}</p><div class="step-content">${wizardStepContent()}${actionError}</div><div class="editor-actions"><button class="btn btn-secondary" type="button" data-action="previous-step"${step === 0 ? ' disabled' : ''}>← Back</button><div class="right-actions">${step < 4 ? `<button class="btn btn-primary" type="button" data-action="next-step">Next step <span aria-hidden="true">→</span></button>` : `<button class="btn btn-primary" type="button" data-action="generate-page">${editSlug ? 'Save my changes' : 'Create their page'} <span aria-hidden="true">♡</span></button>`}</div></div></section><aside class="preview-panel" aria-label="Live birthday page preview"><div class="preview-head"><div><h2>A little peek at their page</h2><p>Your changes show up here right away</p></div><div class="preview-switch" role="group" aria-label="Preview size"><button type="button" data-action="preview-mode" data-mode="desktop" class="${previewMode === 'desktop' ? 'active' : ''}" aria-pressed="${previewMode === 'desktop'}">Desktop</button><button type="button" data-action="preview-mode" data-mode="mobile" class="${previewMode === 'mobile' ? 'active' : ''}" aria-pressed="${previewMode === 'mobile'}">Mobile</button></div></div><div id="live-preview" class="preview-frame ${previewMode === 'mobile' ? 'mobile' : ''}">${birthdayMarkup(birthdayDraft(), { preview: true })}</div><p class="preview-caption">A real page preview — not just a picture ♡</p></aside></div></div></main>${footer()}`;
+  return `${header()}<main class="generator-shell"><div class="shell"><div class="page-top" style="padding:0 0 16px"><a class="breadcrumb" href="/" data-navigate>← Back to Birthday Spark</a></div><div class="generator-heading"><div><h1>${editSlug ? 'Make a little update' : 'Let’s make their birthday page'}</h1><p>A few sweet details, then it’s ready to share. ♡</p></div><div class="generator-progress" aria-label="Step ${step + 1} of 5">${stepsMeta.map((_, index) => `<span class="progress-dot${index <= step ? ' active' : ''}" aria-hidden="true"></span>`).join('')}<span class="progress-label">${step + 1} of 5</span></div></div><div class="generator-layout"><section class="editor-panel" aria-labelledby="step-title"><h2 class="editor-step-heading" id="step-title" tabindex="-1">${meta.title}</h2><p class="editor-step-copy">${meta.copy}</p><div class="step-content">${wizardStepContent()}${actionError}</div><div class="editor-actions"><button class="btn btn-secondary" type="button" data-action="previous-step"${step === 0 ? ' disabled' : ''}>← Back</button><div class="right-actions">${step < 4 ? `<button class="btn btn-primary" type="button" data-action="next-step">Next step <span aria-hidden="true">→</span></button>` : `<button class="btn btn-primary" type="button" data-action="generate-page">${editSlug ? 'Save my changes' : 'Create their page'} <span aria-hidden="true">♡</span></button>`}</div></div>${editSlug ? managePage(editSlug) : ''}</section><aside class="preview-panel" aria-label="Live birthday page preview"><div class="preview-head"><div><h2>A little peek at their page</h2><p>Your changes show up here right away</p></div><div class="preview-switch" role="group" aria-label="Preview size"><button type="button" data-action="preview-mode" data-mode="desktop" class="${previewMode === 'desktop' ? 'active' : ''}" aria-pressed="${previewMode === 'desktop'}">Desktop</button><button type="button" data-action="preview-mode" data-mode="mobile" class="${previewMode === 'mobile' ? 'active' : ''}" aria-pressed="${previewMode === 'mobile'}">Mobile</button></div></div><div id="live-preview" class="preview-frame ${previewMode === 'mobile' ? 'mobile' : ''}">${birthdayMarkup(birthdayDraft(), { preview: true })}</div><p class="preview-caption">A real page preview — not just a picture ♡</p></aside></div></div></main>${footer()}`;
 }
 
 function successPage(slug) {
   const birthday = currentPage?.slug === slug ? currentPage : null;
   if (!birthday) return `${header()}<main class="error-state"><div><div class="success-icon">🎁</div><h1>Your little link isn’t here yet</h1><p>Build their birthday story first, then we’ll bring you back to its share card.</p><a class="btn btn-primary" href="/create" data-navigate>Make a birthday page</a></div></main>${footer()}`;
   const link = `${location.origin}${publicPath(slug)}`;
-  return `${header()}<main class="success-wrap"><section class="success-card"><div class="success-icon" aria-hidden="true">🎉</div><span class="eyebrow">All wrapped up</span><h1>Your birthday surprise is ready!</h1><p>One lovely little page for ${esc(birthday.recipient.name)}. Send this link wherever they are, and let them open their surprise.</p><div class="share-url"><input id="share-link" aria-label="Birthday page link" readonly value="${esc(link)}"><button class="btn btn-primary btn-small" type="button" data-action="copy-link">Copy link</button></div><div class="share-actions"><button class="btn btn-secondary btn-small" type="button" data-action="share-native">Share…</button><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://wa.me/?text=${encodeURIComponent(`A little birthday surprise for ${birthday.recipient.name}: ${link}`)}">WhatsApp ↗</a><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`A birthday surprise for ${birthday.recipient.name}`)}">Telegram ↗</a><a class="btn btn-secondary btn-small" href="mailto:?subject=${encodeURIComponent(`A birthday surprise for ${birthday.recipient.name}`)}&body=${encodeURIComponent(`A little birthday surprise for you: ${link}`)}">Email ↗</a><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(link)}">Facebook ↗</a></div><div class="success-preview">${birthdayMarkup(birthday, { preview: true })}</div><div class="success-bottom"><a class="text-link" href="${publicPath(slug)}" data-navigate>Open their birthday page →</a><a class="text-link" href="/edit/${encodeURIComponent(slug)}" data-navigate>Edit this page</a><button class="text-link new-page-link" type="button" data-action="new-page">Make another page</button></div></section></main>${footer()}`;
+  return `${header()}<main class="success-wrap"><section class="success-card"><div class="success-icon" aria-hidden="true">🎉</div><span class="eyebrow">All wrapped up</span><h1>Your birthday surprise is ready!</h1><p>One lovely little page for ${esc(birthday.recipient.name)}. Send this link wherever they are, and let them open their surprise.</p><div class="share-url"><input id="share-link" aria-label="Birthday page link" readonly value="${esc(link)}"><button class="btn btn-primary btn-small" type="button" data-action="copy-link">Copy link</button></div><div class="share-actions"><button class="btn btn-secondary btn-small" type="button" data-action="share-native">Share…</button><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://wa.me/?text=${encodeURIComponent(`A little birthday surprise for ${birthday.recipient.name}: ${link}`)}">WhatsApp ↗</a><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`A birthday surprise for ${birthday.recipient.name}`)}">Telegram ↗</a><a class="btn btn-secondary btn-small" href="mailto:?subject=${encodeURIComponent(`A birthday surprise for ${birthday.recipient.name}`)}&body=${encodeURIComponent(`A little birthday surprise for you: ${link}`)}">Email ↗</a><a class="btn btn-secondary btn-small" target="_blank" rel="noreferrer" href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(link)}">Facebook ↗</a></div><div class="success-preview">${birthdayMarkup(birthday, { preview: true })}</div>${recoveryPanel(slug)}<div class="success-bottom"><a class="text-link" href="${publicPath(slug)}" data-navigate>Open their birthday page →</a><a class="text-link" href="/edit/${encodeURIComponent(slug)}" data-navigate>Edit / manage this page</a><button class="text-link new-page-link" type="button" data-action="new-page">Make another page</button></div></section></main>${footer()}`;
 }
 
 function errorPage(title = 'This birthday surprise couldn’t be found 🎈', description = 'That little link may be old or mistyped. Ask the person who made it for a fresh one.') {
   return `${header()}<main class="error-state"><div><div class="success-icon" aria-hidden="true">🎈</div><h1>${esc(title)}</h1><p>${esc(description)}</p><a class="btn btn-primary" href="/" data-navigate>Back to Birthday Spark</a></div></main>${footer()}`;
 }
 
+function recoveryPanel(slug) {
+  if (!getEditToken(slug)) return '';
+  return `<section class="recovery-panel" aria-label="Private editing access"><h2>Save your private edit link</h2><p>Keep this somewhere safe. Anyone with this private link can edit or delete the birthday page.</p><div class="share-actions"><button class="btn btn-secondary btn-small" type="button" data-action="copy-edit-link" data-slug="${esc(slug)}">Copy private edit link</button><button class="text-link" type="button" data-action="download-recovery" data-slug="${esc(slug)}">Download recovery info</button></div></section>`;
+}
+function managePage(slug) {
+  return `<section class="manage-page" aria-label="Manage page"><h3>Manage page</h3>${recoveryPanel(slug)}<button type="button" class="text-link delete-link" data-action="confirm-delete" data-slug="${esc(slug)}">Delete birthday page</button></section>`;
+}
+function closeDeleteDialog() {
+  if (deleteDialog?.dataset.busy === 'true') return;
+  deleteDialog?.close(); deleteDialog?.remove(); deleteDialog = null; deleteFocusOrigin?.focus();
+}
+function confirmDelete(slug, origin) {
+  deleteFocusOrigin = origin;
+  deleteDialog = document.createElement('dialog');
+  deleteDialog.className = 'delete-dialog';
+  deleteDialog.setAttribute('aria-labelledby', 'delete-title');
+  deleteDialog.setAttribute('aria-describedby', 'delete-description');
+  deleteDialog.innerHTML = `<h2 id="delete-title">Delete birthday page?</h2><p id="delete-description">This permanently removes the birthday page. Anyone opening its public link will no longer be able to see it.</p><p data-delete-status role="status"></p><div class="share-actions"><button class="btn btn-secondary" type="button" data-action="cancel-delete" autofocus>Cancel</button><button class="btn btn-danger" type="button" data-action="delete-page" data-slug="${esc(slug)}">Permanently delete</button></div>`;
+  deleteDialog.addEventListener('cancel', event => { event.preventDefault(); closeDeleteDialog(); });
+  document.body.appendChild(deleteDialog); deleteDialog.showModal();
+}
+async function deletePage(slug) {
+  const token = getEditToken(slug);
+  if (!token || !deleteDialog) return;
+  const dialog = deleteDialog;
+  dialog.dataset.busy = 'true';
+  dialog.querySelectorAll('button').forEach(button => { button.disabled = true; });
+  dialog.querySelector('[data-delete-status]').textContent = 'Removing the birthday page…';
+  try {
+    await api(`/api/birthdays/${encodeURIComponent(slug)}`, { method: 'DELETE', headers: { 'x-edit-token': token } });
+    sessionTokens.delete(slug);
+    try { localStorage.removeItem(tokenKey(slug)); localStorage.removeItem(`birthday-spark-card-${slug}`); if (localStorage.getItem('birthday-spark-last-created') === slug) localStorage.removeItem('birthday-spark-last-created'); } catch { /* device storage may be unavailable */ }
+    currentPage = null; editSlug = null; form = defaultForm(); step = 0; saveDraft();
+    musicArmController?.abort(); await stopMusic();
+    dialog.dataset.busy = 'false'; closeDeleteDialog(); go('/?deleted=1');
+  } catch (error) {
+    dialog.dataset.busy = 'false'; dialog.querySelectorAll('button').forEach(button => { button.disabled = false; });
+    dialog.querySelector('[data-delete-status]').textContent = error.message;
+  }
+}
+async function copyPrivateLink(slug) {
+  if (!getEditToken(slug)) return;
+  try { await navigator.clipboard.writeText(privateEditLink(slug)); toast('Private edit link copied. Keep it somewhere safe.'); }
+  catch { downloadRecovery(slug); toast('Recovery info downloaded because clipboard access is unavailable.'); }
+}
+function downloadRecovery(slug) {
+  if (!getEditToken(slug)) return;
+  const file = new Blob([`Birthday Spark — private recovery information\n\nKeep this safe. Anyone with this link can edit or delete the birthday page.\n${privateEditLink(slug)}\n\nPublic birthday page: ${location.origin}${publicPath(slug)}\n`], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(file); const a = document.createElement('a'); a.href = url; a.download = `birthday-spark-${slug}-recovery.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function render() {
   const sequence = ++renderSequence;
   const path = decodeURIComponent(location.pathname);
+  musicArmController?.abort();
+  if (!path.startsWith('/edit/')) editSlug = null;
   window.generatorError = '';
   if (path === '/create' || path === '/edit' || path.startsWith('/edit/')) {
     updatePageMetadata('Build their birthday story — Birthday Spark', 'Make a beautiful personal birthday website in a few minutes.');
     if (path.startsWith('/edit/')) {
       const slug = path.slice('/edit/'.length);
-      const token = localStorage.getItem(tokenKey(slug));
-      if (!token) { updatePageMetadata('Private edit link — Birthday Spark', 'Edit links stay with the browser that created the page.'); root.innerHTML = errorPage('This private edit link isn’t on this device', 'For safety, birthday pages can only be edited on the device that created them. You can still open and share the public page.'); return; }
+      const fragmentToken = new URLSearchParams(location.hash.slice(1)).get('token');
+      // Remove the secret immediately, even if validation fails or the network is offline.
+      if (location.hash) history.replaceState({}, '', `${location.pathname}${location.search}`);
+      const token = fragmentToken || getEditToken(slug);
+      if (!token) { root.innerHTML = errorPage('Your private edit link is needed', 'Open the private recovery link you saved when creating this page, or return to the browser you used to create it. You can still share its public link.'); return; }
+      root.innerHTML = `<main class="error-state"><div><h1>Opening your editor…</h1><p>Checking your private edit link.</p></div></main>`;
       try {
         const response = await api(`/api/birthdays/${encodeURIComponent(slug)}/edit`, { headers: { 'x-edit-token': token } });
         if (sequence !== renderSequence) return;
+        rememberEditToken(slug, token);
         editSlug = slug;
+        currentPage = response.birthday;
         form = formFromBirthday(response.birthday);
       } catch (error) { if (sequence === renderSequence) { updatePageMetadata('Page edit unavailable — Birthday Spark', 'This birthday page cannot be edited on this device.'); root.innerHTML = errorPage('This page is ready, but it can’t be edited here', error.message); } return; }
     } else {
       editSlug = null;
       const selectedTheme = new URLSearchParams(location.search).get('theme');
-      if (selectedTheme && themes.some(theme => theme.id === selectedTheme)) form.themeId = selectedTheme;
+      if (selectedTheme && themes.some(theme => theme.id === selectedTheme)) { form.themeId = selectedTheme; if (form.musicAuto) form.musicTrack = themeById(selectedTheme).defaultMusic; }
     }
     root.innerHTML = wizardPage();
     updateLivePreview();
@@ -396,6 +469,7 @@ async function render() {
       const response = await api(`/api/birthdays/${encodeURIComponent(slug)}`);
       if (sequence !== renderSequence) return;
       currentPage = response.birthday;
+      if (currentPage.music?.enabled !== true) await stopMusic();
       try { localStorage.setItem(`birthday-spark-card-${slug}`, JSON.stringify(currentPage)); } catch {}
       const title = `Happy Birthday ${currentPage.recipient.name} 🎂`;
       const description = `Someone made ${currentPage.recipient.name} a special birthday surprise.`;
@@ -406,14 +480,53 @@ async function render() {
       armExperienceMusic(root.querySelector('.birthday-page'));
     } catch (error) {
       if (sequence === renderSequence) {
-        if (cardFromHash) return;
+        if (cardFromHash && error.status !== 404) return;
+        currentPage = null; await stopMusic();
+        try { localStorage.removeItem(`birthday-spark-card-${slug}`); } catch {}
         updatePageMetadata('Birthday surprise not found — Birthday Spark', 'This birthday surprise could not be found.');
         root.innerHTML = errorPage('This birthday surprise couldn’t be found 🎈', error.message);
       }
     }
     return;
   }
-  if (path.startsWith('/ready/')) { updatePageMetadata('Your birthday surprise is ready — Birthday Spark', 'Your special birthday page is ready to share.'); root.innerHTML = successPage(path.slice('/ready/'.length)); return; }
+  if (path.startsWith('/ready/')) {
+    const slug = path.slice('/ready/'.length);
+    updatePageMetadata('Your birthday surprise is ready — Birthday Spark', 'Your special birthday page is ready to share.');
+    if (currentPage?.slug !== slug) {
+      currentPage = null;
+      try { const saved = JSON.parse(localStorage.getItem(`birthday-spark-card-${slug}`) || 'null'); if (saved?.slug === slug && saved.recipient) currentPage = saved; } catch { /* fetch below */ }
+    }
+    const cachedReady = Boolean(currentPage);
+    if (!currentPage) {
+      root.innerHTML = `<main class="error-state"><div><h1>Finding your birthday surprise…</h1><p>Your share card will be ready in a moment.</p></div></main>`;
+      try {
+        const response = await api(`/api/birthdays/${encodeURIComponent(slug)}`);
+        if (sequence !== renderSequence) return;
+        currentPage = response.birthday;
+        try { localStorage.setItem(`birthday-spark-card-${slug}`, JSON.stringify(currentPage)); } catch {}
+      } catch (error) { if (sequence === renderSequence) root.innerHTML = errorPage(undefined, error.message); return; }
+    }
+    root.innerHTML = successPage(slug);
+    // Show cached sharing controls immediately, but don't leave a deleted page's
+    // old share card on screen after deletion from another recovered device.
+    if (cachedReady) {
+      try {
+        const response = await api(`/api/birthdays/${encodeURIComponent(slug)}`);
+        if (sequence !== renderSequence) return;
+        currentPage = response.birthday;
+        try { localStorage.setItem(`birthday-spark-card-${slug}`, JSON.stringify(currentPage)); } catch {}
+        root.innerHTML = successPage(slug);
+      } catch (error) {
+        if (sequence === renderSequence && error.status === 404) {
+          currentPage = null;
+          try { localStorage.removeItem(`birthday-spark-card-${slug}`); } catch {}
+          root.innerHTML = errorPage(undefined, error.message);
+        }
+      }
+    }
+    return;
+  }
+  if (path === '/' && new URLSearchParams(location.search).get('deleted') === '1') { updatePageMetadata('Birthday page removed — Birthday Spark', 'The birthday page has been removed.'); root.innerHTML = errorPage('The birthday page has been removed', 'Its public link will no longer open the birthday story. You can make a new birthday page whenever you’re ready.'); return; }
   editSlug = null;
   updatePageMetadata('Birthday Spark — make their day magic', 'Turn photos, memories, music, and birthday wishes into a beautiful personalized webpage in minutes.');
   root.innerHTML = homePage();
@@ -428,7 +541,7 @@ function formFromBirthday(birthday) {
     message: story.letter || birthday.message?.text || '', messageSource: birthday.message?.type || 'custom', themeId: birthday.themeId || 'strawberry',
     intro: story.intro || '', reasons: Array.isArray(story.reasons) ? [...story.reasons] : [], insideJoke: story.insideJoke || '', surprise: story.surprise || '', secret: story.secret || '', closing: story.closing || '', signature: story.signature || '',
     storyOrder: Array.isArray(story.order) ? [...story.order] : ['letter', 'memories', 'reasons', 'inside-joke', 'surprise'],
-    musicTrack: birthday.music?.trackId || themeById(birthday.themeId).defaultMusic, musicEnabled: !!birthday.music?.enabled, musicAuto: false,
+    musicTrack: birthday.music?.trackId || themeById(birthday.themeId).defaultMusic, musicEnabled: !!birthday.music?.enabled, musicAuto: birthday.music?.automatic === true,
     animationIntensity: birthday.customization?.animationIntensity || 'normal', showConfetti: birthday.customization?.showConfetti !== false,
     showCake: birthday.customization?.showCake !== false, showGallery: birthday.customization?.showGallery !== false,
     finaleStyle: birthday.customization?.finaleStyle || (birthday.story ? 'theme' : birthday.customization?.showCake !== false ? 'cake' : 'quiet'),
@@ -453,13 +566,21 @@ function go(path) {
   if (hash) requestAnimationFrame(() => document.querySelector(hash)?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }));
 }
 
+function refreshFinish() {
+  const open = [...document.querySelectorAll('.finish-editor details[open]')].map(item => item.id).filter(Boolean);
+  const focusedId = document.activeElement?.id;
+  root.innerHTML = wizardPage(); updateLivePreview();
+  open.forEach(id => document.getElementById(id)?.setAttribute('open', ''));
+  if (focusedId) document.getElementById(focusedId)?.focus();
+}
+
 function updateField(input) {
   const field = input.dataset.field;
   if (!field) return;
   if (['musicEnabled', 'showCake', 'showConfetti', 'showGallery', 'soundEffects'].includes(field)) form[field] = input.checked;
   else form[field] = input.value;
   if (field === 'message') form.messageSource = 'custom';
-  if (field === 'musicTrack') { form.musicAuto = false; form.musicEnabled = true; }
+  if (field === 'musicTrack') form.musicAuto = false;
   if (field === 'musicTrack') {
     const selected = musicCatalog.find(track => track.id === form.musicTrack);
     if (selected) {
@@ -472,6 +593,7 @@ function updateField(input) {
     if (getActiveTrack() && getActiveTrack() !== form.musicTrack) stopMusic();
   }
   saveDraft();
+  if (step === 4 && ['musicTrack', 'musicEnabled', 'finaleStyle', 'animationIntensity'].includes(field)) { refreshFinish(); return; }
   if (field === 'message') {
     const count = document.querySelector('#message-count');
     if (count) count.textContent = String(form.message.length);
@@ -552,21 +674,9 @@ async function uploadFiles(fileList) {
     try {
       const dataUrl = await compressImage(file);
       if (status) status.textContent = `Adding photo ${index + 1} of ${files.length}…`;
-      let photoObj = {
-        url: dataUrl,
-        alt: `${form.recipientName || 'Birthday'} memory`,
-        caption: '',
-        year: '',
-        memory: ''
-      };
-      try {
-        const result = await api('/api/uploads', { method: 'POST', body: JSON.stringify({ dataUrl }) });
-        if (result && result.photo && result.photo.url) {
-          photoObj = { ...photoObj, ...result.photo };
-        }
-      } catch (uploadErr) {
-        console.warn('API upload fallback to direct dataUrl:', uploadErr.message);
-      }
+      const result = await api('/api/uploads', { method: 'POST', body: JSON.stringify({ dataUrl }) });
+      if (!result.photo?.url) throw new Error('That photo could not be saved. Please try again.');
+      const photoObj = { ...result.photo, alt: `${form.recipientName || 'Birthday'} memory`, caption: '', year: '', memory: '' };
       form.photos.push(photoObj);
       saveDraft();
       if (location.pathname === '/create' || location.pathname.startsWith('/edit/')) { root.innerHTML = wizardPage(); updateLivePreview(); }
@@ -580,19 +690,20 @@ async function generatePage(button) {
   if (!form.recipientName.trim()) { step = 0; window.generatorError = 'Add their name so we know who to celebrate.'; root.innerHTML = wizardPage(); updateLivePreview(); return; }
   if (!form.message.trim()) form.message = makeMessage();
   if (!themes.some(theme => theme.id === form.themeId)) form.themeId = 'strawberry';
+  if (form.musicAuto) form.musicTrack = themes.find(theme => theme.id === form.themeId).defaultMusic;
   const original = button.innerHTML;
   button.disabled = true;
   button.innerHTML = 'Wrapping the birthday magic… ✨';
   try {
     let birthday;
     if (editSlug) {
-      const token = localStorage.getItem(tokenKey(editSlug));
+      const token = getEditToken(editSlug);
       const response = await api(`/api/birthdays/${encodeURIComponent(editSlug)}`, { method: 'PATCH', headers: { 'x-edit-token': token || '' }, body: JSON.stringify({ birthday: birthdayDraft() }) });
       birthday = response.birthday;
     } else {
       const response = await api('/api/birthdays', { method: 'POST', body: JSON.stringify({ birthday: birthdayDraft() }) });
       birthday = response.birthday;
-      localStorage.setItem(tokenKey(birthday.slug), response.editToken);
+      rememberEditToken(birthday.slug, response.editToken);
     }
     currentPage = birthday;
     try {
@@ -703,8 +814,9 @@ function updateMemoryDialog(page, index) {
 
 async function beginExperienceMusic(page) {
   const isPreview = page?.classList.contains('preview');
-  if (isPreview || getActiveTrack()) return;
-  const birthday = currentPage || birthdayDraft();
+  if (!page?.isConnected || isPreview || page.dataset.musicEnabled !== 'true' || getActiveTrack()) return;
+  const birthday = currentPage;
+  if (birthday?.music?.enabled !== true) return;
   const trackId = birthday?.music?.trackId || themeById(birthday?.themeId).defaultMusic || 'birthday_classic';
   try { await startMusic(trackId); } catch { /* the greeting and its interactions work without audio */ }
 }
@@ -784,7 +896,7 @@ async function interactWithTheme(button) {
     page.classList.toggle('jukebox-on');
     button.setAttribute('aria-pressed', String(page.classList.contains('jukebox-on')));
     button.innerHTML = page.classList.contains('jukebox-on') ? 'The club is playing <span aria-hidden="true">♫</span>' : 'Drop the needle <span aria-hidden="true">♫</span>';
-    if (status) status.textContent = page.classList.contains('jukebox-on') ? 'Your table is ready. The soundtrack is on.' : 'The player paused. Tap when you are ready.';
+    if (status) status.textContent = page.classList.contains('jukebox-on') ? (page.dataset.musicEnabled === 'true' ? 'Your table is ready. The soundtrack is on.' : 'Your table is ready. Enjoy your quiet birthday club.') : 'The club is waiting. Open it when you are ready.';
   } else if (interaction === 'constellation') {
     const star = button.dataset.star;
     if (state.stars.has(star)) return;
@@ -817,6 +929,12 @@ async function handleAction(action, element) {
   else if (action === 'generate-message') { form.message = makeMessage(); form.messageSource = 'generated'; saveDraft(); root.innerHTML = wizardPage(); updateLivePreview(); }
   else if (action === 'choose-message') { form.message = messageSuggestions[Number(element.dataset.messageIndex)] || makeMessage(); form.messageSource = 'template'; saveDraft(); root.innerHTML = wizardPage(); updateLivePreview(); }
   else if (action === 'preview-mode') { previewMode = element.dataset.mode; document.querySelectorAll('[data-action="preview-mode"]').forEach(button => { button.classList.toggle('active', button.dataset.mode === previewMode); button.setAttribute('aria-pressed', String(button.dataset.mode === previewMode)); }); updateLivePreview(); }
+  else if (action === 'recommended-track') { form.musicAuto = true; form.musicTrack = themeById(form.themeId).defaultMusic; selectedMusicMood = null; saveDraft(); refreshFinish(); }
+  else if (action === 'copy-edit-link') copyPrivateLink(element.dataset.slug);
+  else if (action === 'download-recovery') downloadRecovery(element.dataset.slug);
+  else if (action === 'confirm-delete') confirmDelete(element.dataset.slug, element);
+  else if (action === 'cancel-delete') closeDeleteDialog();
+  else if (action === 'delete-page') deletePage(element.dataset.slug);
   else if (action === 'copy-link') copyLink();
   else if (action === 'share-native') nativeShare();
   else if (action === 'new-page') { if (getActiveTrack()) stopMusic(); form = defaultForm(); step = 0; editSlug = null; currentPage = null; saveDraft(); go('/create'); }
@@ -827,6 +945,7 @@ async function handleAction(action, element) {
     } else {
       const page = element.closest('.birthday-page');
       const birthday = page?.classList.contains('preview') ? birthdayDraft() : currentPage;
+      if (birthday?.music?.enabled !== true) return;
       const trackId = birthday?.music?.trackId || themeById(birthday?.themeId).defaultMusic || 'birthday_classic';
       try { await startMusic(trackId); } catch (error) { toast(error.message, true); }
     }
@@ -836,7 +955,7 @@ async function handleAction(action, element) {
   else if (action === 'memory-open') { const page = element.closest('.birthday-page'); memoryFocusOrigin = element; updateMemoryDialog(page, Number(element.dataset.memoryIndex)); const dialog = page?.querySelector('[data-memory-lightbox]'); if (dialog) { dialog.hidden = false; dialog.focus?.(); dialog.querySelector('[data-action="memory-close"]')?.focus(); } }
   else if (action === 'memory-close') { const page = element.closest('.birthday-page'); const dialog = page?.querySelector('[data-memory-lightbox]'); if (dialog) dialog.hidden = true; memoryFocusOrigin?.focus(); memoryFocusOrigin = null; }
   else if (action === 'memory-modal-step') { const page = element.closest('.birthday-page'); updateMemoryDialog(page, Number(page.dataset.lightboxMemory || 0) + Number(element.dataset.step)); }
-  else if (action === 'reason-reveal') { const revealed = element.getAttribute('aria-expanded') === 'true'; element.setAttribute('aria-expanded', String(!revealed)); element.classList.toggle('is-revealed', !revealed); }
+  else if (action === 'reason-reveal') { const revealed = element.getAttribute('aria-expanded') === 'true'; element.setAttribute('aria-expanded', String(!revealed)); element.classList.toggle('is-revealed', !revealed); element.querySelector('.reason-back, .inside-back')?.setAttribute('aria-hidden', String(revealed)); }
   else if (action === 'reveal-gift') { const message = element.closest('.surprise-scene')?.querySelector('[data-gift-message]'); if (message) { message.hidden = false; element.setAttribute('aria-expanded', 'true'); element.classList.add('is-open'); element.querySelector('span:last-child').textContent = 'A little something for you'; playPageSound(element.closest('.birthday-page'), 'reveal'); } }
   else if (action === 'reveal-secret') { const note = element.closest('.secret-discovery')?.querySelector('[data-secret-note]'); if (note) { note.hidden = false; element.setAttribute('aria-expanded', 'true'); element.classList.add('is-open'); playPageSound(element.closest('.birthday-page'), 'secret'); } }
   else if (action === 'story-order') { const index = Number(element.dataset.index); const next = index + Number(element.dataset.direction); if (next >= 0 && next < form.storyOrder.length) { [form.storyOrder[index], form.storyOrder[next]] = [form.storyOrder[next], form.storyOrder[index]]; saveDraft(); root.innerHTML = wizardPage(); updateLivePreview(); document.querySelector('.story-path-editor')?.setAttribute('open', ''); } }
@@ -852,7 +971,7 @@ async function handleAction(action, element) {
     if (page?.dataset.confetti === 'true') launchConfetti();
     const isPreview = page?.classList.contains('preview');
     const birthday = isPreview ? birthdayDraft() : currentPage;
-    if (birthday?.music?.enabled && !getActiveTrack()) { try { await startMusic(birthday.music.trackId); } catch { /* soundtrack is optional */ } }
+    if (!isPreview && birthday?.music?.enabled === true && !getActiveTrack()) { try { await startMusic(birthday.music.trackId); } catch { /* soundtrack is optional */ } }
     await playPageSound(page, 'finale');
   }
 }
@@ -918,6 +1037,7 @@ document.addEventListener('change', event => {
     if (!target.checked) form.storyOrder = form.storyOrder.filter(item => item !== section);
     saveDraft(); root.innerHTML = wizardPage(); updateLivePreview(); document.querySelector('.story-path-editor')?.setAttribute('open', '');
   }
+  if (target.matches('[data-music-mood]')) { selectedMusicMood = target.value; refreshFinish(); document.querySelector('#music-choices')?.setAttribute('open', ''); }
   if (target.id === 'photo-input') uploadFiles(target.files);
 });
 
