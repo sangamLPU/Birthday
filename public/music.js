@@ -93,16 +93,19 @@ function midiFrequency(note) { return 440 * (2 ** ((note - 69) / 12)); }
 
 function tone(note, when, duration, settings = {}) {
   const context = engine.context;
+  const startTime = Math.max(context.currentTime + 0.005, when);
   const patch = settings.patch || voiceProfiles.felt;
+  const attack = Math.max(0.005, settings.attack ?? patch.attack);
+  const release = Math.max(0.02, settings.release ?? patch.release);
   const amplitude = Math.max(.0001, settings.level ?? patch.level);
   const filter = context.createBiquadFilter();
   const envelope = context.createGain();
   filter.type = settings.filterType || 'lowpass';
-  filter.frequency.setValueAtTime(settings.cutoff || patch.cutoff, when);
+  filter.frequency.setValueAtTime(settings.cutoff || patch.cutoff, startTime);
   filter.Q.value = settings.q || .6;
-  envelope.gain.setValueAtTime(.0001, when);
-  envelope.gain.exponentialRampToValueAtTime(amplitude, when + (settings.attack ?? patch.attack));
-  envelope.gain.exponentialRampToValueAtTime(.0001, when + duration + (settings.release ?? patch.release));
+  envelope.gain.setValueAtTime(.0001, startTime);
+  envelope.gain.exponentialRampToValueAtTime(amplitude, startTime + attack);
+  envelope.gain.exponentialRampToValueAtTime(.0001, startTime + duration + release);
   filter.connect(envelope);
   envelope.connect(engine.master);
   const oscillators = [];
@@ -110,7 +113,7 @@ function tone(note, when, duration, settings = {}) {
     if (!level) continue;
     const oscillator = context.createOscillator();
     oscillator.type = wave;
-    oscillator.frequency.setValueAtTime(midiFrequency(note), when);
+    oscillator.frequency.setValueAtTime(midiFrequency(note), startTime);
     oscillator.detune.value = detune;
     const voiceGain = context.createGain();
     voiceGain.gain.value = level;
@@ -118,28 +121,30 @@ function tone(note, when, duration, settings = {}) {
     voiceGain.connect(filter);
     oscillator.onended = () => engine.nodes.delete(oscillator);
     engine.nodes.add(oscillator);
-    oscillator.start(when);
-    oscillator.stop(when + duration + (settings.release ?? patch.release) + .025);
+    oscillator.start(startTime);
+    oscillator.stop(startTime + duration + release + .025);
     oscillators.push(oscillator);
   }
 }
 
 function noise(when, duration, kind, level) {
+  const startTime = Math.max(engine.context.currentTime + 0.005, when);
+  const safeDuration = Math.max(0.02, duration);
   const source = engine.context.createBufferSource();
   source.buffer = engine.noiseBuffer;
   const filter = engine.context.createBiquadFilter();
   const envelope = engine.context.createGain();
   filter.type = 'highpass';
-  filter.frequency.setValueAtTime(kind === 'snare' ? 850 : 4200, when);
-  envelope.gain.setValueAtTime(Math.max(.0001, level), when);
-  envelope.gain.exponentialRampToValueAtTime(.0001, when + duration);
+  filter.frequency.setValueAtTime(kind === 'snare' ? 850 : 4200, startTime);
+  envelope.gain.setValueAtTime(Math.max(.0001, level), startTime);
+  envelope.gain.exponentialRampToValueAtTime(.0001, startTime + safeDuration);
   source.connect(filter);
   filter.connect(envelope);
   envelope.connect(engine.master);
   source.onended = () => engine.nodes.delete(source);
   engine.nodes.add(source);
-  source.start(when);
-  source.stop(when + duration + .01);
+  source.start(startTime);
+  source.stop(startTime + safeDuration + .01);
 }
 
 function scheduleKick(when, level = .08) {
@@ -192,18 +197,29 @@ function scheduleStep(score) {
 }
 
 export async function startMusic(trackId) {
-  if (!scores[trackId]) trackId = 'twinkle';
+  if (!scores[trackId]) trackId = 'birthday_classic';
   const context = ensureContext();
-  await context.resume();
+  if (context.state === 'suspended') {
+    await context.resume();
+  }
   if (engine.timer) clearInterval(engine.timer);
   engine.active = trackId;
   engine.step = 0;
-  engine.nextTime = context.currentTime + .08;
+  engine.nextTime = context.currentTime + .05;
   engine.master.gain.cancelScheduledValues(context.currentTime);
-  engine.master.gain.setTargetAtTime(engine.volume, context.currentTime, .28);
-  const score = scores[trackId];
+  engine.master.gain.setValueAtTime(0.0001, context.currentTime);
+  engine.master.gain.setTargetAtTime(engine.volume, context.currentTime, .18);
+  const score = scores[trackId] || scores.birthday_classic;
   engine.timer = setInterval(() => {
-    if (!engine.active || !engine.context || engine.context.state !== 'running') return;
+    if (!engine.active || !engine.context) return;
+    if (engine.context.state === 'suspended') {
+      engine.context.resume().catch(() => {});
+      return;
+    }
+    if (engine.context.state !== 'running') return;
+    if (engine.nextTime < engine.context.currentTime) {
+      engine.nextTime = engine.context.currentTime + 0.02;
+    }
     const horizon = engine.context.currentTime + .22;
     while (engine.nextTime < horizon) scheduleStep(score);
   }, 55);

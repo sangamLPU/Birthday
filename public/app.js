@@ -6,7 +6,7 @@ const defaultForm = () => ({
   recipientName: '', nickname: '', relationship: 'Friend', age: '', birthdayDate: '', location: '', personality: '',
   photos: [], message: '', messageSource: 'template', intro: '', reasons: [], insideJoke: '', surprise: '', secret: '', closing: '', signature: '',
   storyOrder: ['letter', 'memories', 'reasons', 'inside-joke', 'surprise'],
-  themeId: 'strawberry', musicTrack: 'elegant', musicEnabled: false, musicAuto: true, animationIntensity: 'normal',
+  themeId: 'strawberry', musicTrack: 'birthday_classic', musicEnabled: true, musicAuto: true, animationIntensity: 'normal',
   showConfetti: true, showCake: true, showGallery: true, finaleStyle: 'theme', soundEffects: true, tone: 'Sweet', length: 'Medium', context: ''
 });
 let favoriteThemeIds = new Set();
@@ -169,13 +169,27 @@ function closeThemePreview() {
 
 function birthdayMarkup(birthday, { preview = false } = {}) {
   const themeId = themes.some(theme => theme.id === birthday.themeId) ? birthday.themeId : 'strawberry';
-  const music = birthday.music || { trackId: 'twinkle', enabled: false };
-  const track = musicCatalog.find(item => item.id === music.trackId) || musicCatalog.find(item => item.id === 'twinkle');
+  const trackId = birthday.music?.trackId || themeById(themeId).defaultMusic || 'birthday_classic';
+  const music = { trackId, enabled: true };
+  const track = musicCatalog.find(item => item.id === trackId) || musicCatalog[0];
   const settings = birthday.customization || { showConfetti: true, showCake: true, showGallery: true, soundEffects: true };
   const animationStyle = ['low', 'normal', 'high'].includes(settings.animationIntensity) ? settings.animationIntensity : 'normal';
-  const experience = renderThemeExperience(themeId, birthday, { preview, track });
+  const experience = renderThemeExperience(themeId, { ...birthday, music }, { preview, track });
   const lightbox = `<div class="memory-lightbox" data-memory-lightbox hidden role="dialog" aria-modal="true" aria-label="A birthday memory"><button type="button" class="memory-lightbox-close" data-action="memory-close" aria-label="Close memory">×</button><button type="button" class="memory-lightbox-step previous" data-action="memory-modal-step" data-step="-1" aria-label="Previous memory">←</button><figure><img data-lightbox-image alt=""><figcaption><span data-lightbox-date></span><strong data-lightbox-caption></strong><span data-lightbox-note></span></figcaption></figure><button type="button" class="memory-lightbox-step next" data-action="memory-modal-step" data-step="1" aria-label="Next memory">→</button></div>`;
   return `<article class="birthday-page theme-${themeId} animation-${animationStyle}${preview ? ' preview' : ''}" data-theme-page="${themeId}" data-confetti="${settings.showConfetti !== false}" data-sound-effects="${settings.soundEffects !== false}" data-finale-style="${esc(settings.finaleStyle || 'cake')}">${experience}${lightbox}</article>`;
+}
+
+function armExperienceMusic(page) {
+  if (!page || page.classList.contains('preview')) return;
+  const onFirstInteraction = async () => {
+    window.removeEventListener('pointerdown', onFirstInteraction, { capture: true });
+    window.removeEventListener('keydown', onFirstInteraction, { capture: true });
+    if (!getActiveTrack()) {
+      await beginExperienceMusic(page);
+    }
+  };
+  window.addEventListener('pointerdown', onFirstInteraction, { capture: true, once: true });
+  window.addEventListener('keydown', onFirstInteraction, { capture: true, once: true });
 }
 
 function observeBirthdayReveals() {
@@ -296,7 +310,7 @@ function birthdayDraft() {
     story: { intro: form.intro.trim(), letter: form.message.trim(), reasons: form.reasons.map(reason => reason.trim()).filter(Boolean), insideJoke: form.insideJoke.trim(), surprise: form.surprise.trim(), secret: form.secret.trim(), closing: form.closing.trim(), signature: form.signature.trim(), order: [...form.storyOrder] },
     themeId: form.themeId,
     photos: form.photos.map(photo => ({ url: photo.url, alt: photo.alt || `A birthday memory of ${form.recipientName}`, caption: photo.caption || '', year: photo.year || '', memory: photo.memory || '' })),
-    music: { trackId: form.musicTrack, enabled: form.musicEnabled },
+    music: { trackId: form.musicTrack || 'birthday_classic', enabled: form.musicEnabled !== false },
     customization: { animationIntensity: form.animationIntensity, showConfetti: form.showConfetti, showCake: form.showCake, showGallery: form.showGallery, finaleStyle: form.finaleStyle, soundEffects: form.soundEffects }
   };
 }
@@ -373,6 +387,7 @@ async function render() {
       root.innerHTML = birthdayMarkup(currentPage);
       updateMusicControls({ detail: { trackId: getActiveTrack(), volume: getMusicVolume() } });
       observeBirthdayReveals();
+      armExperienceMusic(root.querySelector('.birthday-page'));
     } else {
       root.innerHTML = `<main class="error-state"><div><div class="success-icon">✦</div><h1>Opening your birthday surprise…</h1><p>A little love note is on its way.</p></div></main>`;
     }
@@ -388,6 +403,7 @@ async function render() {
       root.innerHTML = birthdayMarkup(currentPage);
       updateMusicControls({ detail: { trackId: getActiveTrack(), volume: getMusicVolume() } });
       observeBirthdayReveals();
+      armExperienceMusic(root.querySelector('.birthday-page'));
     } catch (error) {
       if (sequence === renderSequence) {
         if (cardFromHash) return;
@@ -443,7 +459,7 @@ function updateField(input) {
   if (['musicEnabled', 'showCake', 'showConfetti', 'showGallery', 'soundEffects'].includes(field)) form[field] = input.checked;
   else form[field] = input.value;
   if (field === 'message') form.messageSource = 'custom';
-  if (field === 'musicTrack') form.musicAuto = false;
+  if (field === 'musicTrack') { form.musicAuto = false; form.musicEnabled = true; }
   if (field === 'musicTrack') {
     const selected = musicCatalog.find(track => track.id === form.musicTrack);
     if (selected) {
@@ -687,9 +703,10 @@ function updateMemoryDialog(page, index) {
 
 async function beginExperienceMusic(page) {
   const isPreview = page?.classList.contains('preview');
-  const birthday = isPreview ? birthdayDraft() : currentPage;
-  if (!birthday?.music?.enabled || getActiveTrack()) return;
-  try { await startMusic(birthday.music.trackId); } catch { /* the greeting and its interactions work without audio */ }
+  if (isPreview || getActiveTrack()) return;
+  const birthday = currentPage || birthdayDraft();
+  const trackId = birthday?.music?.trackId || themeById(birthday?.themeId).defaultMusic || 'birthday_classic';
+  try { await startMusic(trackId); } catch { /* the greeting and its interactions work without audio */ }
 }
 
 async function interactWithTheme(button) {
@@ -718,18 +735,32 @@ async function interactWithTheme(button) {
     if (status) status.textContent = state.petals === 3 ? 'Three petals gathered. A little luck for the year ahead.' : `${state.petals} of 3 petals gathered`;
     if (state.petals === 3) page.classList.add('garden-awake');
   } else if (interaction === 'album') {
-    state.album += 1;
-    page.classList.add('album-open');
+    const isPreview = page.classList.contains('preview');
+    const birthday = isPreview ? birthdayDraft() : currentPage;
     const slides = [...page.querySelectorAll('.memory-slide img')];
+    const photoList = (birthday?.photos && birthday.photos.length > 0)
+      ? birthday.photos
+      : slides.map(img => ({ url: img.src, alt: img.alt, caption: '' }));
+    const total = Math.max(1, photoList.length);
+    state.album = (state.album % total) + 1;
+    page.classList.add('album-open');
     const portrait = page.querySelector('.scrapbook-portrait img');
-    if (slides.length && portrait) {
-      const selected = slides[(state.album - 1) % slides.length];
-      portrait.src = selected.src;
-      portrait.alt = selected.alt;
+    if (portrait && photoList.length) {
+      const selected = photoList[state.album - 1];
+      if (selected?.url) portrait.src = selected.url;
+      if (selected?.alt || selected?.caption) portrait.alt = selected.alt || selected.caption;
+    }
+    const figcaption = page.querySelector('.scrapbook-portrait figcaption');
+    if (figcaption && photoList.length) {
+      const selected = photoList[state.album - 1];
+      figcaption.textContent = selected.caption || selected.memory || (total > 1 ? `Memory ${state.album} of ${total}` : 'the day is better with you in it');
+    }
+    if (slides.length) {
+      setMemoryIndex(page, state.album - 1);
     }
     button.setAttribute('aria-pressed', 'true');
-    button.innerHTML = 'Turn another page <span aria-hidden="true">↗</span>';
-    if (status) status.textContent = `Page ${state.album} turned. The memory album is open.`;
+    button.innerHTML = state.album === total ? 'Turn to beginning <span aria-hidden="true">↺</span>' : 'Turn another page <span aria-hidden="true">↗</span>';
+    if (status) status.textContent = total > 1 ? `Page ${state.album} of ${total} turned. The memory album is open.` : 'Page 1 turned. The memory album is open.';
   } else if (interaction === 'balloons') {
     const balloon = button.dataset.star || button.dataset.interactionIndex || button.getAttribute('aria-label');
     if (button.dataset.popped) return;
@@ -790,7 +821,16 @@ async function handleAction(action, element) {
   else if (action === 'share-native') nativeShare();
   else if (action === 'new-page') { if (getActiveTrack()) stopMusic(); form = defaultForm(); step = 0; editSlug = null; currentPage = null; saveDraft(); go('/create'); }
   else if (action === 'theme-interact') interactWithTheme(element);
-  else if (action === 'toggle-music') { if (getActiveTrack()) await stopMusic(); else { const page = element.closest('.birthday-page'); const birthday = page?.classList.contains('preview') ? birthdayDraft() : currentPage; if (birthday?.music?.enabled) { try { await startMusic(birthday.music.trackId); } catch (error) { toast(error.message, true); } } } }
+  else if (action === 'toggle-music') {
+    if (getActiveTrack()) {
+      await stopMusic();
+    } else {
+      const page = element.closest('.birthday-page');
+      const birthday = page?.classList.contains('preview') ? birthdayDraft() : currentPage;
+      const trackId = birthday?.music?.trackId || themeById(birthday?.themeId).defaultMusic || 'birthday_classic';
+      try { await startMusic(trackId); } catch (error) { toast(error.message, true); }
+    }
+  }
   else if (action === 'memory-step') stepMemory(element.closest('.birthday-page'), Number(element.dataset.step));
   else if (action === 'memory-select') { const page = element.closest('.birthday-page'); const index = Number(element.dataset.memoryIndex); setMemoryIndex(page, index); page.querySelector(`[data-memory-slide="${index}"]`)?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'nearest', inline: 'center' }); }
   else if (action === 'memory-open') { const page = element.closest('.birthday-page'); memoryFocusOrigin = element; updateMemoryDialog(page, Number(element.dataset.memoryIndex)); const dialog = page?.querySelector('[data-memory-lightbox]'); if (dialog) { dialog.hidden = false; dialog.focus?.(); dialog.querySelector('[data-action="memory-close"]')?.focus(); } }

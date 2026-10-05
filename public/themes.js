@@ -88,7 +88,7 @@ function renderSecretMarker(id, text) {
 }
 
 function renderMusicPlayer(c) {
-  if (!c.music.enabled || c.preview) return '';
+  if (c.preview) return '';
   return `<aside class="birthday-music music-${c.id}" aria-label="Birthday soundtrack"><span class="player-glyph" aria-hidden="true">${{ strawberry: '◉', sakura: '✿', teddy: '▣', cloud: '▤', bunny: '♫', candy: '●', starry: '✧' }[c.id]}</span><span class="player-copy"><strong>${esc(c.track.name)}</strong><small>${esc(c.track.mood)} · original score</small></span><span class="music-visualizer" aria-hidden="true">${Array.from({ length: 7 }, () => '<i></i>').join('')}</span><button type="button" data-action="toggle-music" aria-label="Play birthday music" aria-pressed="false">▶</button><label class="sr-only" for="music-volume">Music volume</label><input id="music-volume" type="range" min="0" max="1" step=".05" value=".32" data-volume aria-label="Music volume"></aside>`;
 }
 
