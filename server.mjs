@@ -82,6 +82,51 @@ async function writeDatabase(rows) {
   }
 }
 
+async function getBirthdayBySlug(slug) {
+  if (kvUrl && kvToken) {
+    try {
+      const res = await fetch(`${kvUrl}/get/birthday:${encodeURIComponent(slug)}`, {
+        headers: { Authorization: `Bearer ${kvToken}` }
+      });
+      const data = await res.json();
+      if (data && data.result) {
+        return typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+      }
+    } catch (err) {
+      console.error('KV read slug error:', err.message);
+    }
+  }
+  const rows = await readDatabase();
+  return rows.find(r => r.slug === slug);
+}
+
+async function saveBirthdayRecord(row) {
+  if (kvUrl && kvToken) {
+    try {
+      await fetch(`${kvUrl}/set/birthday:${encodeURIComponent(row.slug)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${kvToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(JSON.stringify(row))
+      });
+    } catch (err) {
+      console.error('KV save slug error:', err.message);
+    }
+  }
+}
+
+async function deleteBirthdayRecord(slug) {
+  if (kvUrl && kvToken) {
+    try {
+      await fetch(`${kvUrl}/del/birthday:${encodeURIComponent(slug)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${kvToken}` }
+      });
+    } catch (err) {
+      console.error('KV delete slug error:', err.message);
+    }
+  }
+}
+
 function json(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -263,22 +308,21 @@ async function handleApi(req, res, url) {
     catch (error) { return json(res, 400, { error: error.message }); }
     const rows = await readDatabase();
     let slug;
-    do { slug = `${slugPart(normalized.recipient.name)}-${randomBytes(12).toString('hex')}`; }
+    do { slug = `${slugPart(normalized.recipient.name)}-${randomBytes(4).toString('hex')}`; }
     while (rows.some(row => row.slug === slug));
     const editToken = randomBytes(32).toString('base64url');
     const now = new Date().toISOString();
     const row = { id: randomUUID(), slug, ...normalized, editTokenHash: hashToken(editToken).toString('hex'), createdAt: now, updatedAt: now };
     rows.push(row);
     await writeDatabase(rows);
+    await saveBirthdayRecord(row);
     return json(res, 201, { birthday: publicRecord(row), editToken });
   }
 
   const match = url.pathname.match(/^\/api\/birthdays\/([a-z0-9-]+)(?:\/(edit))?$/);
   if (match) {
     const [, slug, editPath] = match;
-    const rows = await readDatabase();
-    const index = rows.findIndex(row => row.slug === slug);
-    const row = rows[index];
+    const row = await getBirthdayBySlug(slug);
     if (req.method === 'GET' && !editPath) return row ? json(res, 200, { birthday: publicRecord(row) }) : json(res, 404, { error: 'This birthday surprise could not be found.' });
     if (req.method === 'GET' && editPath) {
       if (!authorized(row, req.headers['x-edit-token'])) return json(res, 403, { error: 'This private edit link is not available on this device.' });
@@ -290,16 +334,23 @@ async function handleApi(req, res, url) {
       let normalized;
       try { normalized = normalizeBirthday(input.birthday); }
       catch (error) { return json(res, 400, { error: error.message }); }
+      const rows = await readDatabase();
+      const index = rows.findIndex(r => r.slug === slug);
       const replacedPhotos = (row.photos || []).map(photo => photo.url);
-      rows[index] = { ...row, ...normalized, updatedAt: new Date().toISOString() };
+      const updated = { ...row, ...normalized, updatedAt: new Date().toISOString() };
+      if (index >= 0) rows[index] = updated; else rows.push(updated);
       await writeDatabase(rows);
+      await saveBirthdayRecord(updated);
       await cleanupUnusedPhotos(replacedPhotos, rows);
-      return json(res, 200, { birthday: publicRecord(rows[index]) });
+      return json(res, 200, { birthday: publicRecord(updated) });
     }
     if (req.method === 'DELETE' && !editPath) {
       if (!authorized(row, req.headers['x-edit-token'])) return json(res, 403, { error: 'This page can only be removed by its creator.' });
-      rows.splice(index, 1);
+      const rows = await readDatabase();
+      const index = rows.findIndex(r => r.slug === slug);
+      if (index >= 0) rows.splice(index, 1);
       await writeDatabase(rows);
+      await deleteBirthdayRecord(slug);
       await cleanupUnusedPhotos((row?.photos || []).map(photo => photo.url), rows);
       return json(res, 200, { ok: true });
     }
@@ -311,8 +362,7 @@ async function serveStatic(req, res, url) {
   if (url.pathname.startsWith('/api/')) return handleApi(req, res, url);
   const birthdayRoute = url.pathname.match(/^\/birthday\/([a-z0-9-]+)$/);
   if (birthdayRoute && (req.method === 'GET' || req.method === 'HEAD')) {
-    const [rows, shell] = await Promise.all([readDatabase(), readFile(path.join(publicDir, 'index.html'), 'utf8')]);
-    const birthday = rows.find(row => row.slug === birthdayRoute[1]);
+    const [birthday, shell] = await Promise.all([getBirthdayBySlug(birthdayRoute[1]), readFile(path.join(publicDir, 'index.html'), 'utf8')]);
     let document = shell;
     if (birthday) {
       const title = escapeHtml(`Happy Birthday ${birthday.recipient.name} 🎂`);
