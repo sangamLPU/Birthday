@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { put, del } from '@vercel/blob';
+import { getVercelOidcToken } from '@vercel/oidc';
 import sharp from 'sharp';
 import { production, storageDir, uploadDir, redisConfig, redis, durableReady, getBirthdayBySlug, storeBirthday, photoKey, rateLimit, ServiceError } from './storage.mjs';
 import { renderSocialImage } from './social.mjs';
@@ -51,16 +52,22 @@ function trustedBlobUrl(value) {
   } catch { return false; }
 }
 
-function blobOptions() {
-  // Prefer Vercel's rotating OIDC credentials. Passing a static token explicitly
-  // would disable the SDK's OIDC selection and refresh behavior.
-  if (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID) return {};
+async function blobOptions() {
+  // In Vercel Functions, the OIDC token is request-scoped in
+  // x-vercel-oidc-token; it usually is not present in process.env at runtime.
+  let oidcToken = null;
+  try { oidcToken = await getVercelOidcToken(); } catch { /* fall back to a read/write token */ }
+  if (oidcToken && process.env.BLOB_STORE_ID) return { oidcToken, storeId: process.env.BLOB_STORE_ID };
   if (process.env.BLOB_READ_WRITE_TOKEN) return {};
   const customTokens = Object.entries(process.env).filter(([key, value]) => value && /(?:^|_)BLOB_READ_WRITE_TOKEN$/.test(key));
   return customTokens.length === 1 ? { token: customTokens[0][1] } : null;
 }
 
-function blobConfigured() { return blobOptions() !== null; }
+function blobConfigured() {
+  if (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID) return true;
+  if (process.env.BLOB_READ_WRITE_TOKEN) return true;
+  return Object.entries(process.env).filter(([key, value]) => value && /(?:^|_)BLOB_READ_WRITE_TOKEN$/.test(key)).length === 1;
+}
 
 async function cleanupUnusedPhotos(previous, updated) {
   const retained = new Set((updated?.photos || []).map(photo => photo.url));
@@ -68,7 +75,7 @@ async function cleanupUnusedPhotos(previous, updated) {
     if (retained.has(url)) continue;
     try {
       if (trustedBlobUrl(url) && redisConfig() && await redis(['GET', photoKey(url)]) === `deleting:${previous.slug}`) {
-        await del(url, blobOptions() || {});
+        await del(url, (await blobOptions()) || {});
         // Keep the deleting marker: an old copied URL must never become attachable again.
       } else if (!redisConfig() && /^\/uploads\/[a-f0-9-]+\.(?:webp|png|jpe?g)$/.test(url)) {
         const rows = JSON.parse(await readFile(path.join(storageDir, 'birthdays.json'), 'utf8'));
@@ -242,18 +249,17 @@ async function handleApi(req, res, url) {
     try { await sharp(bytes, { limitInputPixels: 16_000_000 }).resize(1, 1).raw().toBuffer(); }
     catch { return json(res, 400, { error: 'That image could not be read. Please choose another.' }); }
     if (production || blobConfigured()) {
-      if (!blobConfigured()) throw new ServiceError('Photo uploads need a connected Vercel Blob store. You can still create a page without photos.');
       if (!redisConfig()) throw new ServiceError('Photo uploads need durable Redis for safe photo ownership tracking. You can still create a page without photos.');
+      const options = await blobOptions();
+      if (!options) throw new ServiceError('Photo uploads need a connected Vercel Blob store. You can still create a page without photos.');
       let blob;
       try {
         const extension = type === 'image/jpeg' ? 'jpg' : type.slice(6);
-        const options = blobOptions();
-        if (!options) throw new ServiceError('Photo uploads need a connected Vercel Blob store.');
         blob = await put(`birthdays/${randomUUID()}.${extension}`, bytes, { access: 'public', addRandomSuffix: false, contentType: type, ...options });
         if (!trustedBlobUrl(blob.url)) throw new Error('Unexpected Blob host');
         if (await redis(['SET', photoKey(blob.url), 'pending']) !== 'OK') throw new ServiceError();
       } catch {
-        if (blob?.url && trustedBlobUrl(blob.url)) { try { await del(blob.url, blobOptions() || {}); } catch { /* retry via store administration */ } }
+        if (blob?.url && trustedBlobUrl(blob.url)) { try { await del(blob.url, options); } catch { /* retry via store administration */ } }
         throw new ServiceError('That photo could not be saved. Please try again, or continue without photos.');
       }
       return json(res, 201, { photo: { url: blob.url, alt: 'Birthday memory' } });

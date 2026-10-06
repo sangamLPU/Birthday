@@ -7,11 +7,11 @@
   },
   "rewrites": [
     {
-      "source": "/birthday/(.*)",
-      "destination": "/api/public?birthday=$1"
+      "source": "/api/:path*",
+      "destination": "/api/index?path=api/:path*"
     },
-    { "source": "/api/social/(.*).png", "destination": "/api/public?social=$1" },
-    { "source": "/uploads/(.*)", "destination": "/api/public?upload=$1" },
+    { "source": "/birthday/:slug", "destination": "/api/index?path=birthday/:slug" },
+    { "source": "/uploads/:path*", "destination": "/api/index?path=uploads/:path*" },
     {
       "source": "/create",
       "destination": "/index.html"
