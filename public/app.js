@@ -301,7 +301,7 @@ function makeMessage() {
 
 function wizardStepContent() {
   if (step === 0) return `<div class="field-stack"><div class="recipient-note"><strong>Start with the person, not the template.</strong><br>A nickname, birthday detail or familiar place can make the opening feel unmistakably theirs.</div><div class="field"><label for="recipient-name">Their name</label><input class="input" id="recipient-name" data-field="recipientName" maxlength="80" autocomplete="off" placeholder="e.g. Prachi" value="${esc(form.recipientName)}"><small>This is how their name will appear on the page.</small></div><div class="field-row"><div class="field"><label for="recipient-nickname">What you call them</label><input class="input" id="recipient-nickname" data-field="nickname" maxlength="48" placeholder="A nickname (optional)" value="${esc(form.nickname)}"></div><div class="field"><label for="relationship">They’re my…</label><select class="select" id="relationship" data-field="relationship">${relationships.map(item => `<option${form.relationship === item ? ' selected' : ''}>${esc(item)}</option>`).join('')}</select></div></div><details class="customize-details"><summary>A few details about them</summary><div class="customize-options"><div class="field-row"><div class="field"><label for="recipient-age">Age (optional)</label><input class="input" id="recipient-age" type="number" min="1" max="130" data-field="age" value="${esc(form.age)}" placeholder="e.g. 30"></div><div class="field"><label for="recipient-birthday">Birthday date</label><input class="input" id="recipient-birthday" type="date" data-field="birthdayDate" value="${esc(form.birthdayDate)}"></div></div><div class="field"><label for="recipient-place">A place that feels like them</label><input class="input" id="recipient-place" class="input" data-field="location" maxlength="100" placeholder="Their city, a favorite place…" value="${esc(form.location)}"></div><div class="field"><label for="recipient-personality">Their kind of energy</label><input class="input" id="recipient-personality" data-field="personality" maxlength="100" placeholder="e.g. quiet mischief, big-hearted, always dancing" value="${esc(form.personality)}"></div></div></details><p class="hint">These extra details are optional. Anyone with the link can view this birthday page, so avoid including anything you wouldn’t want forwarded.</p></div>`;
-  if (step === 1) return `<div><label class="upload-zone" id="upload-zone" for="photo-input"><input class="sr-only" id="photo-input" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="Choose birthday photos"><span><span class="upload-icon" aria-hidden="true">＋</span><strong>Drop photos here, or browse</strong><p>JPG, PNG or WebP · up to 5 photos · resized before upload</p></span></label><p class="photo-status" id="photo-status" aria-live="polite">${form.photos.length ? `${form.photos.length} photo${form.photos.length === 1 ? '' : 's'} ready` : 'No photos yet — your story can be lovely without photos too.'}</p><div class="memory-editor-list">${form.photos.map((photo, index) => `<article class="memory-editor"><div class="memory-editor-photo"><img src="${esc(photo.url)}" alt="${esc(photo.alt || `Selected birthday photo ${index + 1}`)}" loading="lazy">${index === 0 ? '<span class="photo-primary-label">Opening photo</span>' : `<button class="photo-primary-button" type="button" data-action="make-cover" data-index="${index}">Make opening photo</button>`}<button class="photo-remove" type="button" data-action="remove-photo" data-index="${index}" aria-label="Remove photo ${index + 1}">×</button></div><details class="memory-caption-editor"><summary>Give this moment a little context</summary><div class="customize-options"><div class="field"><label>Caption</label><input class="input" data-photo-field="caption" data-photo-index="${index}" maxlength="100" placeholder="What was happening?" value="${esc(photo.caption || '')}"></div><div class="field"><label>Date or year</label><input class="input" data-photo-field="year" data-photo-index="${index}" maxlength="24" placeholder="e.g. Summer 2024" value="${esc(photo.year || '')}"></div><div class="field"><label>The bit you remember</label><textarea class="textarea" data-photo-field="memory" data-photo-index="${index}" maxlength="360" placeholder="A detail you would tell them when this photo comes up…">${esc(photo.memory || '')}</textarea></div></div></details></article>`).join('')}</div><div class="recipient-note" style="margin-top:18px"><strong>Photos become part of the story.</strong><br>They turn into a timeline, album or film strip depending on the theme you choose.</div></div>`;
+  if (step === 1) return `<div><label class="upload-zone" id="upload-zone" for="photo-input"><input class="sr-only" id="photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/avif" multiple aria-label="Choose birthday photos"><span><span class="upload-icon" aria-hidden="true">＋</span><strong>Drop photos here, or browse</strong><p>JPG, PNG, WebP or supported phone photo formats · up to 5 photos · resized before upload</p></span></label><p class="photo-status" id="photo-status" aria-live="polite">${form.photos.length ? `${form.photos.length} photo${form.photos.length === 1 ? '' : 's'} ready` : 'No photos yet — your story can be lovely without photos too.'}</p><div class="memory-editor-list">${form.photos.map((photo, index) => `<article class="memory-editor"><div class="memory-editor-photo"><img src="${esc(photo.url)}" alt="${esc(photo.alt || `Selected birthday photo ${index + 1}`)}" loading="lazy">${index === 0 ? '<span class="photo-primary-label">Opening photo</span>' : `<button class="photo-primary-button" type="button" data-action="make-cover" data-index="${index}">Make opening photo</button>`}<button class="photo-remove" type="button" data-action="remove-photo" data-index="${index}" aria-label="Remove photo ${index + 1}">×</button></div><details class="memory-caption-editor"><summary>Give this moment a little context</summary><div class="customize-options"><div class="field"><label>Caption</label><input class="input" data-photo-field="caption" data-photo-index="${index}" maxlength="100" placeholder="What was happening?" value="${esc(photo.caption || '')}"></div><div class="field"><label>Date or year</label><input class="input" data-photo-field="year" data-photo-index="${index}" maxlength="24" placeholder="e.g. Summer 2024" value="${esc(photo.year || '')}"></div><div class="field"><label>The bit you remember</label><textarea class="textarea" data-photo-field="memory" data-photo-index="${index}" maxlength="360" placeholder="A detail you would tell them when this photo comes up…">${esc(photo.memory || '')}</textarea></div></div></details></article>`).join('')}</div><div class="recipient-note" style="margin-top:18px"><strong>Photos become part of the story.</strong><br>They turn into a timeline, album or film strip depending on the theme you choose.</div></div>`;
   if (step === 2) {
     const name = form.nickname.trim() || form.recipientName.trim() || 'your favorite person';
     messageSuggestions = (sampleMessages[form.tone] || sampleMessages.Sweet)(name);
@@ -594,6 +594,15 @@ function updateField(input) {
     if (getActiveTrack() && getActiveTrack() !== form.musicTrack) stopMusic();
   }
   saveDraft();
+  if (step === 2 && ['tone', 'length'].includes(field)) {
+    const focusedId = input.id;
+    const storyDetailsOpen = document.querySelector('.story-details')?.open;
+    root.innerHTML = wizardPage();
+    if (storyDetailsOpen) document.querySelector('.story-details')?.setAttribute('open', '');
+    updateLivePreview();
+    document.getElementById(focusedId)?.focus();
+    return;
+  }
   if (step === 4 && ['musicTrack', 'musicEnabled', 'finaleStyle', 'animationIntensity'].includes(field)) { refreshFinish(); return; }
   if (field === 'message') {
     const count = document.querySelector('#message-count');
@@ -631,8 +640,8 @@ function stepPrevious() {
 function randomSet(array) { return array[Math.floor(Math.random() * array.length)]; }
 
 async function compressImage(file) {
-  if (!file.type.startsWith('image/')) throw new Error('That file doesn’t look like a photo. Choose a JPG, PNG or WebP image.');
-  if (file.size > 20 * 1024 * 1024) throw new Error('That photo is a little too large. Choose one under 20 MB.');
+  if (file.type && !file.type.startsWith('image/')) throw new Error('That file doesn’t look like a photo. Choose a JPG, PNG or WebP image.');
+  if (file.size > 50 * 1024 * 1024) throw new Error('That photo is a little too large. Choose one under 50 MB.');
   let source;
   if (typeof createImageBitmap === 'function') {
     try { source = await createImageBitmap(file); } catch { /* fallback to Image element */ }
@@ -652,7 +661,7 @@ async function compressImage(file) {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(srcWidth * scale));
   canvas.height = Math.max(1, Math.round(srcHeight * scale));
-  const context = canvas.getContext('2d', { alpha: false });
+  const context = canvas.getContext('2d', { alpha: true });
   context.drawImage(source, 0, 0, canvas.width, canvas.height);
   if (typeof source.close === 'function') source.close();
   let blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .75));
@@ -1039,7 +1048,7 @@ document.addEventListener('change', event => {
     if (!target.checked) form.storyOrder = form.storyOrder.filter(item => item !== section);
     saveDraft(); root.innerHTML = wizardPage(); updateLivePreview(); document.querySelector('.story-path-editor')?.setAttribute('open', '');
   }
-  if (target.id === 'photo-input') uploadFiles(target.files);
+  if (target.id === 'photo-input') { uploadFiles(target.files); target.value = ''; }
 });
 
 document.addEventListener('dragover', event => { const zone = event.target.closest('#upload-zone'); if (zone) { event.preventDefault(); zone.classList.add('dragover'); } });
