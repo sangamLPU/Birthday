@@ -21,14 +21,15 @@ Connect [Upstash Redis](https://upstash.com/docs/redis/howto/connect-with-upstas
 | `UPSTASH_REDIS_REST_URL` | Upstash HTTPS REST endpoint |
 | `UPSTASH_REDIS_REST_TOKEN` | Read/write token allowing GET, SET, DEL and EVAL |
 | `BLOB_READ_WRITE_TOKEN` | Token supplied by the connected public Blob store |
-| `BLOB_PUBLIC_HOSTNAME` | Exact hostname, e.g. `storeid.public.blob.vercel-storage.com`, without scheme/path |
 | `PUBLIC_ORIGIN` | Recommended canonical origin, e.g. `https://birthday.example.com` |
 
-The existing `KV_REST_API_URL` / `KV_REST_API_TOKEN` pair also works. Upstash names take precedence. Broad guessing of environment keys has been removed to avoid mixing credentials. Never expose server tokens to browser JavaScript or source control.
+The existing `KV_REST_API_URL` / `KV_REST_API_TOKEN` pair also works. Upstash names take precedence. Broad guessing of environment keys has been removed to avoid mixing credentials. Blob upload URLs are checked against Vercel’s public Blob hostname pattern, so no separate hostname variable is needed. Never expose server tokens to browser JavaScript or source control.
 
 Vercel and `NODE_ENV=production` require durable Redis. Missing credentials, provider HTTP errors, malformed responses and timeouts return `503`. Creation, editing and deletion succeed only after acknowledged durable writes. `/api/health` reports `durableStorageReady` and storage mode without credentials or environment key lists. Text-only pages work without Blob; new production photo uploads fail clearly without it and never fall back to Base64.
 
 Photos retain browser compression and server type/signature/decode checks. New uploads are limited to 2 MiB and 16 million pixels, keeping Base64 transport within Vercel's function payload budget. Blob uses unique UUID filenames under `birthdays/`; birthday records contain trusted Blob URLs only. See the [Blob SDK documentation](https://vercel.com/docs/vercel-blob/using-blob-sdk) for public access and store tokens.
+
+New production photo uploads require `BLOB_READ_WRITE_TOKEN` and durable Redis. Upload URLs are taken from the authenticated Blob SDK response and must match the HTTPS Vercel public Blob URL pattern; no hostname setting is required. Blob is not needed for text-only pages.
 
 ## Durability and compatibility
 
@@ -50,7 +51,7 @@ Anyone with the private link can edit or delete the page. Keep it safe; share on
 
 ## Experience and organization
 
-Step 5 shows the recommended soundtrack, ending and motion. Advanced options retain ordering/inclusion, alternate endings, cake, motion intensity, confetti, interaction sounds, gallery and detailed music choice. The **21 scores** are grouped by Birthday, Romantic, Playful, Cozy, Dreamy, Cinematic, Lo-fi, Energetic, Magical, Nostalgic, Elegant and Night-time moods. Recommendations follow theme changes until a creator manually selects a score. “A Quiet Kind of Love” keeps the existing `romantic_ballad` ID and composition.
+Step 5 highlights the recommended soundtrack and keeps story ordering, optional scenes, ending, motion, confetti, interaction sounds and photo memories under **Customize the experience**. The **21 scores** remain available from a compact picker, grouped by Birthday, Romantic, Playful, Cozy, Dreamy, Cinematic, Lo-fi, Energetic, Magical, Nostalgic, Elegant and Night-time moods. Recommendations follow theme changes until a creator manually selects a score. “A Quiet Kind of Love” keeps the existing `romantic_ballad` ID and composition.
 
 Music opt-out prevents recipient player rendering, automatic soundtrack starts, theme soundtrack triggers and interaction audio. Creator Listen previews still work. Centralized relationship language changes fallback text only, preserving authored letters/reasons/signatures/closing/surprises/jokes/secrets. Reveals update expanded and screen-reader hidden states; keyboard and reduced-motion behavior remain.
 

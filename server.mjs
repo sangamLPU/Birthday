@@ -47,8 +47,7 @@ function escapeHtml(value) {
 function trustedBlobUrl(value) {
   try {
     const url = new URL(value);
-    const host = process.env.BLOB_PUBLIC_HOSTNAME?.toLowerCase();
-    return Boolean(host && /^[a-z0-9-]+\.public\.blob\.vercel-storage\.com$/.test(host) && url.protocol === 'https:' && url.hostname === host && !url.port && !url.username && !url.password && !url.search && !url.hash && /^\/birthdays\/[a-f0-9-]+\.(?:webp|png|jpe?g)$/.test(url.pathname));
+    return Boolean(url.protocol === 'https:' && /^[a-z0-9-]+\.public\.blob\.vercel-storage\.com$/.test(url.hostname) && !url.port && !url.username && !url.password && !url.search && !url.hash && /^\/birthdays\/[a-f0-9-]+\.(?:webp|png|jpe?g)$/.test(url.pathname));
   } catch { return false; }
 }
 
@@ -232,7 +231,7 @@ async function handleApi(req, res, url) {
     try { await sharp(bytes, { limitInputPixels: 16_000_000 }).resize(1, 1).raw().toBuffer(); }
     catch { return json(res, 400, { error: 'That image could not be read. Please choose another.' }); }
     if (production || process.env.BLOB_READ_WRITE_TOKEN) {
-      if (!process.env.BLOB_READ_WRITE_TOKEN || !process.env.BLOB_PUBLIC_HOSTNAME || !redisConfig()) throw new ServiceError('Photo uploads are temporarily unavailable. You can still create a page without photos.');
+      if (!process.env.BLOB_READ_WRITE_TOKEN || !redisConfig()) throw new ServiceError('Photo uploads are temporarily unavailable. You can still create a page without photos.');
       let blob;
       try {
         const extension = type === 'image/jpeg' ? 'jpg' : type.slice(6);
@@ -379,10 +378,6 @@ async function serveStatic(req, res, url) {
 export async function requestListener(req, res) {
   try {
     const url = new URL(req.url, 'http://localhost');
-    // Explicit rewrite parameter used only for server-rendered public routes.
-    if (url.pathname === '/api/public' && url.searchParams.has('birthday')) url.pathname = `/birthday/${url.searchParams.get('birthday')}`;
-    if (url.pathname === '/api/public' && url.searchParams.has('upload')) url.pathname = `/uploads/${url.searchParams.get('upload')}`;
-    if (url.pathname === '/api/public' && url.searchParams.has('social')) url.pathname = `/api/social/${url.searchParams.get('social')}.png`;
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST' && req.method !== 'PATCH' && req.method !== 'DELETE') {
       res.writeHead(405, { allow: 'GET, HEAD, POST, PATCH, DELETE' }); return res.end();
     }

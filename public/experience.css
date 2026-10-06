@@ -40,6 +40,7 @@
 /* Story controls in the creator stay compact until the creator asks for details. */
 .memory-editor-list{display:grid;gap:13px;margin-top:14px}.memory-editor{display:grid;grid-template-columns:90px minmax(0,1fr);align-items:start;gap:12px;padding:10px;border:1px solid #eee2e0;border-radius:16px;background:#fff}.memory-editor-photo{aspect-ratio:1;position:relative;overflow:hidden;border-radius:11px;background:#f8efeb}.memory-editor-photo img{width:100%;height:100%;display:block;object-fit:cover}.memory-editor-photo .photo-primary-label,.memory-editor-photo .photo-primary-button{font-size:.53rem}.memory-caption-editor{min-width:0;padding:4px 0}.memory-caption-editor summary{color:#77676f;font-size:.76rem;font-weight:760;cursor:pointer}.memory-caption-editor .customize-options{gap:9px;padding-top:10px}.memory-caption-editor .field{gap:5px}.memory-caption-editor .field label{font-size:.74rem}.memory-caption-editor .input,.memory-caption-editor .textarea{min-height:40px;padding:9px 11px;font-size:.8rem}.memory-caption-editor .textarea{min-height:68px}
 .reason-editor-list{display:grid;gap:7px;margin-bottom:8px}.reason-editor-row{position:relative;display:flex;align-items:center;gap:7px}.reason-editor-row .input{padding-right:42px}.reason-editor-row .photo-remove{position:static;flex:none}.story-editor,.finish-editor{display:grid;gap:13px}.story-editor .message-settings{margin:0}.story-editor .message-topline{margin:8px 0 0}.story-editor .customize-details .customize-options{gap:14px}.story-details .customize-options{padding-top:13px}
+.recommended-soundtrack{display:grid;gap:9px}.recommended-soundtrack h3{margin:0;color:#57454b;font:600 1.1rem Georgia,serif}.recommended-soundtrack .hint{margin:0}.track-picker{display:grid;gap:10px;padding:12px;border:1px solid #eee2df;border-radius:14px;background:#fffaf7}.track-picker[hidden]{display:none!important}.track-picker .field{gap:6px}
 .chosen-experience{margin:0 0 15px;padding:13px 15px;border-left:3px solid var(--rose);background:#fff5f4}.chosen-experience span{display:block;color:#99777c;font-size:.54rem;font-weight:850;letter-spacing:.12em}.chosen-experience strong{display:block;margin-top:3px;color:#534048;font:600 1.13rem Georgia,serif}.chosen-experience p{margin:5px 0 0;color:#84777b;font-size:.72rem;line-height:1.5}.score-preview{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid #eee2df;border-radius:15px;background:#fffcf8}.score-glyph{width:42px;height:42px;flex:none;display:grid;place-items:center;border-radius:50%;color:#85637b;background:#f0ecfb;font-size:1.2rem}.score-preview>div:nth-child(2){min-width:0;flex:1}.score-preview strong,.score-preview small{display:block}.score-preview strong{font-size:.83rem}.score-preview small{margin-top:3px;color:#93868a;font-size:.69rem}.score-meter{height:22px;display:flex;align-items:center;gap:3px}.score-meter i{width:3px;height:7px;border-radius:4px;background:#bd7b8d}.score-preview:has([aria-pressed="true"]) .score-meter i{animation:editor-meter .6s ease-in-out infinite alternate}.score-meter i:nth-child(2){animation-delay:-.3s}.score-meter i:nth-child(3){animation-delay:-.15s}.score-meter i:nth-child(4){animation-delay:-.4s}.score-meter i:nth-child(5){animation-delay:-.25s}.score-meter i:nth-child(6){animation-delay:-.1s}.music-optin{padding:3px 0}.story-path-editor .customize-options{gap:13px}.story-order-list{display:grid;gap:6px}.story-order-row{min-height:43px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 7px;border:1px solid #eee5e2;border-radius:10px;background:#fff}.story-order-row label{display:flex;align-items:center;gap:8px;color:#63545b;font-size:.77rem;font-weight:700}.story-order-row input{accent-color:var(--rose)}.story-order-row>div{display:flex;gap:5px}.story-order-row button{width:32px;height:32px;border:1px solid #eee2e0;border-radius:8px;color:#8d6370;background:#fff;font-weight:800;cursor:pointer}.story-order-row button:disabled{opacity:.35;cursor:default}.story-order-spacer{padding-right:6px;color:#a5989b;font-size:.65rem}
 @keyframes editor-meter{to{transform:scaleY(1.9)}}
 @keyframes meter{to{transform:scaleY(1.85)}}@keyframes secret-glimmer{50%{box-shadow:0 0 16px color-mix(in srgb,var(--accent),transparent 70%);transform:scale(1.06)}}@keyframes reveal-note{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}@keyframes record-loop{to{transform:rotate(540deg)}}@keyframes portrait-arrive{from{opacity:.7;transform:translateY(12px) rotate(0)}to{opacity:1;transform:translateY(0) rotate(2deg)}}@keyframes flicker{from{transform:scale(.92) rotate(-4deg);opacity:.84}to{transform:scale(1.08) rotate(5deg);opacity:1}}
@@ -68,11 +69,16 @@
 .success-preview {
   width: 100% !important;
   max-width: 100% !important;
+  height: min(68vh, 640px) !important;
+  min-height: 480px !important;
 }
 
 .preview-frame.mobile {
   width: min(320px, 100%) !important;
   max-width: 320px !important;
+  height: auto !important;
+  min-height: 0 !important;
+  aspect-ratio: 9 / 16;
   margin: 0 auto !important;
   border: 8px solid #282124 !important;
   border-radius: 38px !important;
@@ -83,12 +89,23 @@
 .preview-frame .birthday-page,
 .success-preview .birthday-page,
 .birthday-page.preview {
-  min-height: 480px !important;
+  min-height: 0 !important;
   height: 100% !important;
   display: flex !important;
   flex-direction: column !important;
   overflow: hidden !important;
   box-sizing: border-box !important;
+}
+
+.preview-frame .birthday-experience,
+.success-preview .birthday-experience,
+.birthday-page.preview .birthday-experience {
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  padding-bottom: 0 !important;
 }
 
 /* Hide non-cover elements in live peek preview */
@@ -130,7 +147,7 @@
 .birthday-page.preview .world-cover {
   flex: 1 1 auto !important;
   min-height: 0 !important;
-  height: 100% !important;
+  height: auto !important;
   display: flex !important;
   flex-direction: column !important;
   justify-content: center !important;
@@ -265,8 +282,7 @@
 
 /* 1. Strawberry: The Birthday Edit (Editorial) */
 .preview-frame:not(.mobile) .editorial-cover,
-.success-preview .editorial-cover,
-.birthday-page.preview:not(.mobile) .editorial-cover {
+.success-preview .editorial-cover {
   display: grid !important;
   grid-template-columns: minmax(0, 1.25fr) minmax(130px, 0.75fr) !important;
   gap: 18px !important;
@@ -284,8 +300,7 @@
   width: 100% !important;
 }
 .preview-frame:not(.mobile) .editorial-portrait,
-.success-preview .editorial-portrait,
-.birthday-page.preview:not(.mobile) .editorial-portrait {
+.success-preview .editorial-portrait {
   width: 135px !important;
   height: 185px !important;
   transform: rotate(2deg) !important;
@@ -319,8 +334,7 @@
 
 /* 2. Sakura: A Day in Bloom (Botanical) */
 .preview-frame:not(.mobile) .botanical-cover,
-.success-preview .botanical-cover,
-.birthday-page.preview:not(.mobile) .botanical-cover {
+.success-preview .botanical-cover {
   display: grid !important;
   grid-template-columns: minmax(0, 1.25fr) minmax(130px, 0.75fr) !important;
   gap: 18px !important;
@@ -337,8 +351,7 @@
   width: 100% !important;
 }
 .preview-frame:not(.mobile) .botanical-portrait,
-.success-preview .botanical-portrait,
-.birthday-page.preview:not(.mobile) .botanical-portrait {
+.success-preview .botanical-portrait {
   width: 130px !important;
   height: 130px !important;
   aspect-ratio: 1 !important;
@@ -384,8 +397,7 @@
 
 /* 3. Teddy: Memory Lane (Scrapbook) */
 .preview-frame:not(.mobile) .scrapbook-cover,
-.success-preview .scrapbook-cover,
-.birthday-page.preview:not(.mobile) .scrapbook-cover {
+.success-preview .scrapbook-cover {
   display: grid !important;
   grid-template-columns: minmax(0, 1.2fr) minmax(130px, 0.8fr) !important;
   gap: 16px !important;
@@ -403,8 +415,7 @@
   transform: rotate(-1.5deg) !important;
 }
 .preview-frame:not(.mobile) .scrapbook-portrait,
-.success-preview .scrapbook-portrait,
-.birthday-page.preview:not(.mobile) .scrapbook-portrait {
+.success-preview .scrapbook-portrait {
   width: 100% !important;
   max-width: 135px !important;
   height: auto !important;
@@ -569,7 +580,7 @@
   width: 100% !important;
   flex: 1 1 auto !important;
   min-height: 0 !important;
-  height: 100% !important;
+  height: auto !important;
   padding: 20px 16px !important;
 }
 .preview-frame .club-awning,
@@ -591,6 +602,9 @@
 .birthday-page.preview .club-sign h1 {
   font-size: 1.85rem !important;
 }
+.preview-frame .club-est,
+.success-preview .club-est,
+.birthday-page.preview .club-est { display: none !important; }
 .preview-frame .club-special,
 .success-preview .club-special,
 .birthday-page.preview .club-special { display: none !important; }

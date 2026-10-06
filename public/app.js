@@ -33,7 +33,7 @@ let musicArmController;
 const sessionTokens = new Map();
 let deleteFocusOrigin;
 let deleteDialog;
-let selectedMusicMood;
+let trackPickerOpen = false;
 const experienceProgress = new WeakMap();
 
 try {
@@ -126,10 +126,19 @@ function toast(message, error = false) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { ...options, headers: { ...(options.body ? { 'content-type': 'application/json' } : {}), ...(options.headers || {}) } });
+  let response;
+  try { response = await fetch(path, { ...options, headers: { ...(options.body ? { 'content-type': 'application/json' } : {}), ...(options.headers || {}) } }); }
+  catch { const error = new Error('Birthday storage is temporarily unavailable. Please try again shortly.'); error.status = 503; throw error; }
   let payload;
   try { payload = await response.json(); } catch { payload = {}; }
-  if (!response.ok) { const error = new Error(payload.error || 'Something went wrong. Please try again.'); error.status = response.status; throw error; }
+  if (!response.ok) {
+    const fallback = response.status === 404 ? 'This birthday surprise could not be found.'
+      : response.status === 503 ? 'Birthday storage is temporarily unavailable. Please try again shortly.'
+      : response.status === 429 ? 'A few too many requests just now. Please wait a little and try again.'
+      : response.status === 403 ? 'This private edit link is missing or no longer valid.'
+      : 'We couldn’t complete that request. Please try again.';
+    const error = new Error(payload.error || fallback); error.status = response.status; throw error;
+  }
   return payload;
 }
 
@@ -261,7 +270,7 @@ const stepsMeta = [
   { title: 'Choose the moments to keep', copy: 'Add up to five photos, then give the ones you love a date or a little memory.' },
   { title: 'Write what only you can say', copy: 'Start with your own words. You can add reasons, an inside joke, or a tucked-away note too. Anyone with the page link can open it.' },
   { title: 'Choose their little world', copy: 'Each theme changes how the story opens, how memories appear, and what happens at the end.' },
-  { title: 'Set the mood', copy: 'Their world already has a recommended setup. You can create it now, or open the extra options.' }
+  { title: 'Set the mood', copy: 'Their world comes with a soundtrack. Add a few personal touches if you like.' }
 ];
 
 const sampleMessages = {
@@ -307,13 +316,12 @@ function wizardStepContent() {
     return `<div><div class="chosen-experience"><span>YOUR CURRENT WORLD</span><strong>${esc(pickedTheme.name)}</strong><p>${esc(pickedTheme.description)} The opening: ${esc(pickedTheme.interaction.label.toLowerCase())}.</p></div><div class="chip-row" role="group" aria-label="Filter themes by style" style="margin-bottom:13px">${categories.map(item => `<button type="button" class="chip${category === item ? ' active' : ''}" data-action="filter-generator-themes" data-category="${esc(item)}" aria-pressed="${category === item}">${esc(item)}</button>`).join('')}</div><div class="theme-choice-grid">${available.map(theme => themeTile(theme, { compact: true, selected: form.themeId === theme.id })).join('')}</div></div>`;
   }
   const theme = themeById(form.themeId);
-  const track = musicCatalog.find(item => item.id === form.musicTrack) || musicCatalog.find(item => item.id === theme.defaultMusic);
+  const recommended = musicCatalog.find(item => item.id === theme.defaultMusic) || musicCatalog[0];
+  const track = musicCatalog.find(item => item.id === form.musicTrack) || recommended;
   const sectionTitles = { letter: 'Birthday letter', memories: 'Photo memories', reasons: 'Little reasons', 'inside-joke': 'Inside joke', surprise: 'A small surprise' };
   const ordered = form.storyOrder.filter(section => sectionTitles[section]);
-  const moods = [...new Set(musicCatalog.map(item => item.mood))];
-  const mood = selectedMusicMood || track.mood;
-  const tracks = musicCatalog.filter(item => item.mood === mood);
-  return `<div class="finish-editor"><h3>Recommended setup</h3><div class="setup-summary"><div><strong>Soundtrack</strong><span>${form.musicEnabled ? esc(track.name) : 'A quiet birthday page'}</span></div><div><strong>Ending</strong><span>${form.finaleStyle === 'cake' ? 'Candles and a wish' : form.finaleStyle === 'quiet' ? 'A quiet sign-off' : 'Theme finale'}</span></div><div><strong>Motion</strong><span>${form.animationIntensity === 'low' ? 'Soft and subtle' : form.animationIntensity === 'high' ? 'Party time' : 'Normal'}</span></div></div><p class="hint">${form.musicAuto ? `Recommended for ${esc(theme.name)}` : 'Your selected score'}</p><div class="score-preview"><span class="score-glyph" aria-hidden="true">♫</span><div><strong>${esc(track.name)}</strong><small>${esc(track.kind)}</small></div><div class="score-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><button class="music-preview" type="button" data-action="preview-track" data-track-id="${track.id}" aria-pressed="${activeAudioTrack === track.id}">${activeAudioTrack === track.id ? 'Pause' : 'Listen'}</button></div><label class="check-row music-optin"><input type="checkbox" id="music-enabled" data-field="musicEnabled"${form.musicEnabled ? ' checked' : ''}> Include this score on their page</label><details id="finish-advanced" class="customize-details story-path-editor"><summary>Advanced options</summary><div class="customize-options"><details id="music-choices" class="customize-details"><summary>Change mood</summary><div class="customize-options"><div class="field"><label for="music-mood">Choose a mood</label><select id="music-mood" class="select" data-music-mood>${moods.map(item => `<option${item === mood ? ' selected' : ''}>${esc(item)}</option>`).join('')}</select></div><div class="field"><label for="music-track">Choose an original score</label><select id="music-track" class="select" data-field="musicTrack"><option value="" disabled${!tracks.some(item => item.id === form.musicTrack) ? ' selected' : ''}>Choose a score in this mood</option>${tracks.map(item => `<option value="${item.id}"${form.musicTrack === item.id ? ' selected' : ''}>${esc(item.name)} — ${esc(item.kind)}</option>`).join('')}</select></div><button type="button" class="text-link" data-action="recommended-track">Use the theme’s recommended soundtrack</button><p class="hint">All ${musicCatalog.length} scores play in your browser after a gesture. Listening here works even if their page has music turned off.</p></div></details></div><div class="customize-options"><p class="hint">Use the arrows to change the order. Empty scenes are skipped automatically.</p><div class="story-order-list">${ordered.map((section, index) => `<div class="story-order-row"><label><input type="checkbox" data-story-section="${section}" checked> ${esc(sectionTitles[section] || section)}</label><div><button type="button" data-action="story-order" data-index="${index}" data-direction="-1" aria-label="Move ${esc(sectionTitles[section])} up"${index === 0 ? ' disabled' : ''}>↑</button><button type="button" data-action="story-order" data-index="${index}" data-direction="1" aria-label="Move ${esc(sectionTitles[section])} down"${index === ordered.length - 1 ? ' disabled' : ''}>↓</button></div></div>`).join('')}${Object.keys(sectionTitles).filter(section => !ordered.includes(section)).map(section => `<div class="story-order-row"><label><input type="checkbox" data-story-section="${section}"> ${esc(sectionTitles[section])}</label><span class="story-order-spacer">Add to story</span></div>`).join('')}</div><div class="field"><label for="finale-style">The last scene</label><select id="finale-style" class="select" data-field="finaleStyle"><option value="theme"${form.finaleStyle === 'theme' ? ' selected' : ''}>A finale that belongs to this theme</option><option value="cake"${form.finaleStyle === 'cake' ? ' selected' : ''}>Classic candles and a wish</option><option value="quiet"${form.finaleStyle === 'quiet' ? ' selected' : ''}>A quiet sign-off</option></select></div><label class="check-row"><input type="checkbox" data-field="showCake"${form.showCake ? ' checked' : ''}> Include the candle cake in the classic ending</label><div class="field"><label for="animation-intensity">Motion</label><select id="animation-intensity" class="select" data-field="animationIntensity"><option value="low"${form.animationIntensity === 'low' ? ' selected' : ''}>Soft and subtle</option><option value="normal"${form.animationIntensity === 'normal' ? ' selected' : ''}>A little movement</option><option value="high"${form.animationIntensity === 'high' ? ' selected' : ''}>Party time</option></select></div><label class="check-row"><input type="checkbox" data-field="showConfetti"${form.showConfetti ? ' checked' : ''}> A little confetti at the ending</label><label class="check-row"><input type="checkbox" data-field="soundEffects"${form.soundEffects ? ' checked' : ''}> Soft interaction sounds</label><label class="check-row"><input type="checkbox" data-field="showGallery"${form.showGallery ? ' checked' : ''}> Include photo memories</label></div></details><div class="recipient-note" style="margin-top:19px"><strong>It is still your story.</strong><br>The recipient can read at their own pace, swipe through memories, and skip any interaction they do not feel like trying.</div></div>`;
+  const trackOptions = [...new Set(musicCatalog.map(item => item.mood))].map(mood => `<optgroup label="${esc(mood)}">${musicCatalog.filter(item => item.mood === mood).map(item => `<option value="${item.id}"${form.musicTrack === item.id ? ' selected' : ''}>${esc(item.name)} — ${esc(item.kind)}</option>`).join('')}</optgroup>`).join('');
+  return `<div class="finish-editor"><section class="recommended-soundtrack" aria-labelledby="recommended-soundtrack-title"><h3 id="recommended-soundtrack-title">Recommended soundtrack</h3><div class="score-preview"><span class="score-glyph" aria-hidden="true">♫</span><div><strong>${esc(recommended.name)}</strong><small>${esc(recommended.kind)}</small></div><div class="score-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><button class="music-preview" type="button" data-action="preview-track" data-track-id="${recommended.id}" aria-pressed="${activeAudioTrack === recommended.id}">${activeAudioTrack === recommended.id ? 'Pause' : 'Listen'}</button></div><p class="hint">Made for ${esc(theme.name)}${form.musicAuto ? '' : ` · You picked ${esc(track.name)}`}</p><button class="text-link" type="button" id="change-soundtrack" data-action="toggle-track-picker" aria-expanded="${trackPickerOpen}">${trackPickerOpen ? 'Close soundtrack choices' : 'Change soundtrack'}</button><div class="track-picker"${trackPickerOpen ? '' : ' hidden'}><div class="field"><label for="music-track">Choose a soundtrack</label><select id="music-track" class="select" data-field="musicTrack">${trackOptions}</select></div><button type="button" class="text-link" data-action="recommended-track">Use theme recommendation: ${esc(recommended.name)}</button><button class="music-preview" type="button" data-action="preview-track" data-track-id="${track.id}" aria-pressed="${activeAudioTrack === track.id}">Listen to your choice</button></div></section><label class="check-row music-optin"><input type="checkbox" id="music-enabled" data-field="musicEnabled"${form.musicEnabled ? ' checked' : ''}> Include this score on their page</label><details id="finish-customize" class="customize-details story-path-editor"><summary>Customize the experience</summary><div class="customize-options"><p class="hint">Use the arrows to change the order. Empty scenes are skipped automatically.</p><div class="story-order-list">${ordered.map((section, index) => `<div class="story-order-row"><label><input type="checkbox" data-story-section="${section}" checked> ${esc(sectionTitles[section])}</label><div><button type="button" data-action="story-order" data-index="${index}" data-direction="-1" aria-label="Move ${esc(sectionTitles[section])} up"${index === 0 ? ' disabled' : ''}>↑</button><button type="button" data-action="story-order" data-index="${index}" data-direction="1" aria-label="Move ${esc(sectionTitles[section])} down"${index === ordered.length - 1 ? ' disabled' : ''}>↓</button></div></div>`).join('')}${Object.keys(sectionTitles).filter(section => !ordered.includes(section)).map(section => `<div class="story-order-row"><label><input type="checkbox" data-story-section="${section}"> ${esc(sectionTitles[section])}</label><span class="story-order-spacer">Add to story</span></div>`).join('')}</div><div class="field"><label for="finale-style">The last scene</label><select id="finale-style" class="select" data-field="finaleStyle"><option value="theme"${form.finaleStyle === 'theme' ? ' selected' : ''}>A finale that belongs to this theme</option><option value="cake"${form.finaleStyle === 'cake' ? ' selected' : ''}>Classic candles and a wish</option><option value="quiet"${form.finaleStyle === 'quiet' ? ' selected' : ''}>A quiet sign-off</option></select></div><label class="check-row"><input type="checkbox" data-field="showCake"${form.showCake ? ' checked' : ''}> Include the candle cake in the classic ending</label><div class="field"><label for="animation-intensity">Motion</label><select id="animation-intensity" class="select" data-field="animationIntensity"><option value="low"${form.animationIntensity === 'low' ? ' selected' : ''}>Soft and subtle</option><option value="normal"${form.animationIntensity === 'normal' ? ' selected' : ''}>A little movement</option><option value="high"${form.animationIntensity === 'high' ? ' selected' : ''}>Party time</option></select></div><label class="check-row"><input type="checkbox" data-field="showConfetti"${form.showConfetti ? ' checked' : ''}> A little confetti at the ending</label><label class="check-row"><input type="checkbox" data-field="soundEffects"${form.soundEffects ? ' checked' : ''}> Soft interaction sounds</label><label class="check-row"><input type="checkbox" data-field="showGallery"${form.showGallery ? ' checked' : ''}> Include photo memories</label></div></details><div class="recipient-note" style="margin-top:19px"><strong>It is still your story.</strong><br>The recipient can read at their own pace, swipe through memories, and skip any interaction they do not feel like trying.</div></div>`;
 
 }
 
@@ -483,8 +491,9 @@ async function render() {
         if (cardFromHash && error.status !== 404) return;
         currentPage = null; await stopMusic();
         try { localStorage.removeItem(`birthday-spark-card-${slug}`); } catch {}
-        updatePageMetadata('Birthday surprise not found — Birthday Spark', 'This birthday surprise could not be found.');
-        root.innerHTML = errorPage('This birthday surprise couldn’t be found 🎈', error.message);
+        const notFound = error.status === 404;
+        updatePageMetadata(notFound ? 'Birthday surprise not found — Birthday Spark' : 'Birthday surprise unavailable — Birthday Spark', notFound ? 'This birthday surprise could not be found.' : 'Birthday storage is temporarily unavailable.');
+        root.innerHTML = errorPage(notFound ? 'This birthday surprise couldn’t be found 🎈' : 'Your birthday surprise is temporarily unavailable', error.message);
       }
     }
     return;
@@ -582,14 +591,6 @@ function updateField(input) {
   if (field === 'message') form.messageSource = 'custom';
   if (field === 'musicTrack') form.musicAuto = false;
   if (field === 'musicTrack') {
-    const selected = musicCatalog.find(track => track.id === form.musicTrack);
-    if (selected) {
-      document.querySelector('.score-preview strong')?.replaceChildren(document.createTextNode(selected.name));
-      const description = document.querySelector('.score-preview small');
-      if (description) description.textContent = selected.kind;
-      const preview = document.querySelector('.score-preview [data-action="preview-track"]');
-      if (preview) { preview.dataset.trackId = selected.id; preview.setAttribute('aria-pressed', String(getActiveTrack() === selected.id)); preview.textContent = getActiveTrack() === selected.id ? 'Pause' : 'Listen'; }
-    }
     if (getActiveTrack() && getActiveTrack() !== form.musicTrack) stopMusic();
   }
   saveDraft();
@@ -926,10 +927,11 @@ async function handleAction(action, element) {
   else if (action === 'filter-themes' || action === 'filter-generator-themes') { activeCategory = element.dataset.category; if (action === 'filter-themes') root.innerHTML = themeGalleryPage(); else { root.innerHTML = wizardPage(); updateLivePreview(); } }
   else if (action === 'select-track') { if (getActiveTrack()) stopMusic(); form.musicTrack = element.dataset.trackId; form.musicAuto = false; saveDraft(); root.innerHTML = wizardPage(); updateLivePreview(); }
   else if (action === 'preview-track') toggleTrack(element.dataset.trackId);
+  else if (action === 'toggle-track-picker') { trackPickerOpen = !trackPickerOpen; refreshFinish(); if (trackPickerOpen) document.querySelector('#music-track')?.focus(); else document.querySelector('#change-soundtrack')?.focus(); }
   else if (action === 'generate-message') { form.message = makeMessage(); form.messageSource = 'generated'; saveDraft(); root.innerHTML = wizardPage(); updateLivePreview(); }
   else if (action === 'choose-message') { form.message = messageSuggestions[Number(element.dataset.messageIndex)] || makeMessage(); form.messageSource = 'template'; saveDraft(); root.innerHTML = wizardPage(); updateLivePreview(); }
   else if (action === 'preview-mode') { previewMode = element.dataset.mode; document.querySelectorAll('[data-action="preview-mode"]').forEach(button => { button.classList.toggle('active', button.dataset.mode === previewMode); button.setAttribute('aria-pressed', String(button.dataset.mode === previewMode)); }); updateLivePreview(); }
-  else if (action === 'recommended-track') { form.musicAuto = true; form.musicTrack = themeById(form.themeId).defaultMusic; selectedMusicMood = null; saveDraft(); refreshFinish(); }
+  else if (action === 'recommended-track') { form.musicAuto = true; form.musicTrack = themeById(form.themeId).defaultMusic; saveDraft(); refreshFinish(); }
   else if (action === 'copy-edit-link') copyPrivateLink(element.dataset.slug);
   else if (action === 'download-recovery') downloadRecovery(element.dataset.slug);
   else if (action === 'confirm-delete') confirmDelete(element.dataset.slug, element);
@@ -1021,7 +1023,7 @@ document.addEventListener('click', event => {
 
 document.addEventListener('input', event => {
   const target = event.target;
-  if (target.matches('[data-field]')) updateField(target);
+  if (target.matches('[data-field]') && target.tagName !== 'SELECT') updateField(target);
   if (target.matches('[data-photo-field]')) updatePhotoField(target);
   if (target.matches('[data-reason-index]')) { form.reasons[Number(target.dataset.reasonIndex)] = target.value; saveDraft(); updateLivePreview(); }
   if (target.matches('[data-volume]')) setMusicVolume(target.value);
@@ -1037,7 +1039,6 @@ document.addEventListener('change', event => {
     if (!target.checked) form.storyOrder = form.storyOrder.filter(item => item !== section);
     saveDraft(); root.innerHTML = wizardPage(); updateLivePreview(); document.querySelector('.story-path-editor')?.setAttribute('open', '');
   }
-  if (target.matches('[data-music-mood]')) { selectedMusicMood = target.value; refreshFinish(); document.querySelector('#music-choices')?.setAttribute('open', ''); }
   if (target.id === 'photo-input') uploadFiles(target.files);
 });
 
