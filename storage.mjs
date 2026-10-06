@@ -13,10 +13,21 @@ export class ServiceError extends Error {
   constructor(message = 'Saving is temporarily unavailable. Please try again shortly.', status = 503) { super(message); this.status = status; }
 }
 export function redisConfig() {
-  for (const [urlKey, tokenKey] of [['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN'], ['KV_REST_API_URL', 'KV_REST_API_TOKEN']]) {
+  const standardPairs = [['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN'], ['KV_REST_API_URL', 'KV_REST_API_TOKEN']];
+  for (const [urlKey, tokenKey] of standardPairs) {
     if (process.env[urlKey] && process.env[tokenKey]) return { url: process.env[urlKey], token: process.env[tokenKey] };
   }
-  return null;
+  // Integrations can prefix/suffix their REST variables. Match URL and token
+  // only when the complete prefix and suffix pair are identical.
+  const names = Object.keys(process.env);
+  const candidates = [];
+  for (const urlKey of names) {
+    const match = urlKey.match(/^(.*)_(REST_API|REST)_URL(_[A-Z0-9_]+)?$/i);
+    if (!match) continue;
+    const tokenKey = `${match[1]}_${match[2]}_TOKEN${match[3] || ''}`;
+    if (process.env[urlKey] && process.env[tokenKey]) candidates.push({ url: process.env[urlKey], token: process.env[tokenKey] });
+  }
+  return candidates.length === 1 ? candidates[0] : null;
 }
 export async function redis(command) {
   const config = redisConfig();

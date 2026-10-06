@@ -10,7 +10,8 @@ function queryValue(req, url, key) {
 
 export default function publicHandler(req, res) {
   const url = new URL(req.url || '/', 'https://birthday-spark.invalid');
-  if (url.pathname === '/api/public') {
+  const hasRewriteQuery = ['birthday', 'social', 'upload'].some(key => req.query?.[key] !== undefined || url.searchParams.has(key));
+  if (url.pathname === '/api/public' || hasRewriteQuery) {
     const birthday = queryValue(req, url, 'birthday');
     const social = queryValue(req, url, 'social')?.replace(/\.png$/i, '');
     const upload = queryValue(req, url, 'upload');
